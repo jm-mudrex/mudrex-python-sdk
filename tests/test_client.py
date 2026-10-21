@@ -322,6 +322,7 @@ class TestPlaceOrder(_ClientTestBase):
                 trigger_type="MARKET",
             )
         self.assertIn("use set_leverage()", str(ctx.warning))
+        self.assertIn("removed in 0.3.0", str(ctx.warning))
         self.mock_request.assert_called_once()
         self.assertNotIn("leverage", self.mock_request.call_args[1]["json"])
 

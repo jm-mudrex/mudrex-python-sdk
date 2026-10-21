@@ -288,7 +288,9 @@ So: **single-object responses** use `order_id` / similar; **list responses** use
 
 ## Migrating
 
-See [CHANGELOG.md](CHANGELOG.md) for changed signatures (old → new form), including the deprecation of `leverage` on `place_order` (ignored, `FutureWarning`) and the v1.0.12 close-response shapes.
+**0.2.0 is a breaking release.** Null and scalar API data is now returned unwrapped (no more `resp.result`), and `place_order` uses the v2 path without `leverage`.
+
+See [CHANGELOG.md](CHANGELOG.md) for changed signatures (old → new form), including the deprecation of `leverage` on `place_order` (ignored, `FutureWarning`, removed in 0.3.0) and the v1.0.12 close-response shapes.
 
 ## License
 

@@ -262,12 +262,32 @@ class TestHandleResponse(unittest.TestCase):
         self.assertEqual(ctx.exception.retry_after, 11)
 
     def test_429_missing_or_bad_retry_after_is_none(self):
-        for headers in ({}, {"Retry-After": "soon"}):
+        for headers in (
+            {}, {"Retry-After": "soon"}, {"Retry-After": "-5"},
+            {"Retry-After": "1.5"}, {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
+        ):
             resp = _make_response(429, {"success": False, "message": "slow down"})
             resp.headers = headers
             with self.assertRaises(MudrexAPIError) as ctx:
                 _HTTPClient._handle_response(resp)
             self.assertIsNone(ctx.exception.retry_after)
+
+    def test_request_versions_for_all_verbs(self):
+        client = _HTTPClient(api_secret="s")
+        client._session.request = MagicMock(
+            return_value=_make_response(200, {"success": True, "data": {}})
+        )
+        for verb in (client._get, client._post, client._patch, client._delete):
+            client._session.request.reset_mock()
+            verb("/x", version="v2")
+            self.assertTrue(
+                client._session.request.call_args[1]["url"].endswith("/fapi/v2/x")
+            )
+            client._session.request.reset_mock()
+            verb("/x")
+            self.assertTrue(
+                client._session.request.call_args[1]["url"].endswith("/fapi/v1/x")
+            )
 
     def test_non_429_error_has_no_retry_after(self):
         resp = _make_response(500, {"success": False, "message": "boom"})

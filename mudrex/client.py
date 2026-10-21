@@ -234,8 +234,7 @@ class TradeClient(_HTTPClient):
         Leverage is not part of the request. Call :meth:`set_leverage` for the
         asset first, otherwise the API returns ``400 leverage not found``.
         The ``leverage`` argument is deprecated: it is ignored (never sent)
-        and emits a ``FutureWarning``. It will be removed in a future minor
-        version (no earlier than 0.3.0).
+        and emits a ``FutureWarning``. It will be removed in 0.3.0.
 
         Args:
             symbol: Trading symbol (e.g. ``"BTCUSDT"``).
@@ -262,7 +261,8 @@ class TradeClient(_HTTPClient):
         """
         if leverage is not None:
             warnings.warn(
-                "leverage is ignored by place_order; use set_leverage()",
+                "leverage is ignored by place_order and will be removed in 0.3.0; "
+                "use set_leverage()",
                 FutureWarning,
                 stacklevel=2,
             )
@@ -719,8 +719,9 @@ class TradeClient(_HTTPClient):
             sort_order: ``"asc"`` or ``"desc"`` (case-insensitive; sent
                 lower-cased).
         """
-        if trade_currency is not None:
-            self._validate_currency(trade_currency, "trade_currency")
+        trade_currency = self._validate_currency(
+            trade_currency or self._trade_currency, "trade_currency"
+        )
         if transaction_type is not None:
             transaction_type = str(transaction_type).upper()
             if transaction_type not in ("DEPOSIT", "WITHDRAW"):
@@ -745,7 +746,7 @@ class TradeClient(_HTTPClient):
             "/futures/transactions",
             params={
                 "limit": limit,
-                "trade_currency": trade_currency or self._trade_currency,
+                "trade_currency": trade_currency,
                 "type": transaction_type,
                 "status": status,
                 "sort_by": sort_by,
@@ -786,8 +787,8 @@ class TradeClient(_HTTPClient):
         Only available on USDT clients: raises ``ValueError`` without sending
         a request when the client's ``trade_currency`` is ``"INR"``.
         """
-        # Intentional: INR transfers are not supported by the API; see
-        # https://docs.trade.mudrex.com for the supported wallet operations.
+        # INR uses POST /futures/transfers/inr, not supported here; see
+        # https://docs.trade.mudrex.com.
         if self._trade_currency == "INR":
             raise ValueError("transfer() supports USDT only")
         return self._post(

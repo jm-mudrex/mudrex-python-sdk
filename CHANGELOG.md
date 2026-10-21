@@ -1,10 +1,15 @@
 # Changelog
 
-## 0.2.0
+## 0.2.0 (breaking)
+
+**Upgrade note:** read "Response shape changes" and "Changed signatures" below
+before upgrading. `place_order` moves to the v2 path, and null/scalar API data
+is returned unwrapped (no more `resp.result`), so code that reads
+`resp.result` or relies on `place_order(leverage=...)` must be updated.
 
 Brings the SDK to parity with the Futures API docs v1.0.12. This release
-contains breaking changes (response shapes, unwrapped scalar/null data) and
-must be tagged **`v0.2.0`** (a minor version) at release, not a patch. Removed or invalid call forms raise
+contains breaking changes and must be tagged **`v0.2.0`** (a minor version) at
+release, not a patch. Removed or invalid call forms raise
 `ValueError` and send no request. Two forms are deprecated instead and emit a
 `FutureWarning`: `get_order` and the `leverage` argument of `place_order`.
 
@@ -13,7 +18,7 @@ must be tagged **`v0.2.0`** (a minor version) at release, not a patch. Removed o
 | Area | Old | New |
 |---|---|---|
 | Client currency | `TradeClient(trade_currency="INR")` raised `ValueError` (USDT only) | `trade_currency` accepts `"USDT"` or `"INR"`; other values raise `ValueError` |
-| Place order | `place_order("BTCUSDT", leverage="10", quantity=..., ...)` → `POST /fapi/v1/futures/{symbol}/order` | `client.set_leverage("BTCUSDT", leverage="10")` first, then `place_order("BTCUSDT", quantity=..., ...)` → `POST /fapi/v2/futures/order`. Passing `leverage=` still works but is ignored (never sent) and emits a `FutureWarning`; it will be removed in a future minor version (no earlier than 0.3.0) |
+| Place order | `place_order("BTCUSDT", leverage="10", quantity=..., ...)` → `POST /fapi/v1/futures/{symbol}/order` | `client.set_leverage("BTCUSDT", leverage="10")` first, then `place_order("BTCUSDT", quantity=..., ...)` → `POST /fapi/v2/futures/order`. Passing `leverage=` still works but is ignored (never sent) and emits a `FutureWarning`; it will be removed in 0.3.0 |
 | Client order id on place | not supported | `place_order(..., client_order_id="...")` |
 | Cancel | `cancel_order(order_id)` | `cancel_order(order_id)` or `cancel_order(client_order_id="...")` (exactly one) |
 | Amend | `amend_order(order_id, order_price=...)` | `amend_order(order_id, order_price=..., quantity=...)`. Docs require both; the API response is surfaced unchanged |
@@ -32,7 +37,7 @@ must be tagged **`v0.2.0`** (a minor version) at release, not a patch. Removed o
 ### Deprecated
 
 - `get_order(order_id)` still works but emits `FutureWarning` (visible to callers in imported modules); use `get_order_detail`.
-- `place_order(leverage=...)`: ignored, emits `FutureWarning`, removed in a future minor version (no earlier than 0.3.0).
+- `place_order(leverage=...)`: ignored, emits `FutureWarning`, removed in 0.3.0.
 
 ### Behaviour notes
 

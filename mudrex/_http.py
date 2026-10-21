@@ -171,9 +171,10 @@ class _HTTPClient:
         if headers is None:
             return None
         try:
-            return int(str(headers.get("Retry-After")).strip())
-        except (TypeError, ValueError, AttributeError):
+            value = str(headers.get("Retry-After")).strip()
+        except AttributeError:
             return None
+        return int(value) if value.isdigit() else None
 
     @staticmethod
     def _handle_response(response):
@@ -238,16 +239,18 @@ class _HTTPClient:
 
     # ── convenience verbs ───────────────────────────────────────────────
 
-    def _get(self, path, params=None):
-        return self._request("GET", path, params=params)
+    def _get(self, path, params=None, version="v1"):
+        return self._request("GET", path, params=params, version=version)
 
     def _post(self, path, params=None, body=None, version="v1"):
         return self._request(
             "POST", path, params=params, body=body, version=version
         )
 
-    def _patch(self, path, params=None, body=None):
-        return self._request("PATCH", path, params=params, body=body)
+    def _patch(self, path, params=None, body=None, version="v1"):
+        return self._request(
+            "PATCH", path, params=params, body=body, version=version
+        )
 
-    def _delete(self, path, params=None):
-        return self._request("DELETE", path, params=params)
+    def _delete(self, path, params=None, version="v1"):
+        return self._request("DELETE", path, params=params, version=version)
