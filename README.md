@@ -138,9 +138,9 @@ client = TradeClient(
 
 | Method | Description |
 |---|---|
-| `get_wallet_funds(currency="USDT")` | Get spot wallet balances (`currency="USDT"` or `"INR"`) |
-| `transfer("SPOT", "FUTURES", "100")` | Transfer between wallets |
-| `get_transactions(limit=None, trade_currency=None)` | Futures wallet deposit/withdraw records |
+| `get_wallet_funds(currency=None)` | Get spot wallet balances (`"USDT"` or `"INR"`; defaults to the client's `trade_currency`) |
+| `transfer("SPOT", "FUTURES", "100")` | Transfer between wallets (USDT clients only; raises `ValueError` on an INR client) |
+| `get_transactions(limit=None, trade_currency=None, type=None, status=None, sort_by=None, sort_order=None)` | Futures wallet deposit/withdraw records (known backend issues: `trade_currency` is not currently applied; `status="Processing"` returns no rows) |
 
 ## Trade Currency
 
@@ -151,7 +151,7 @@ client = TradeClient(api_secret="...")  # uses USDT by default
 client = TradeClient(api_secret="...", trade_currency="INR")
 ```
 
-Any other value raises `ValueError` before a request is sent. `get_wallet_funds(currency=...)` is independent of the client's `trade_currency` and defaults to `"USDT"`.
+Any other value raises `ValueError` before a request is sent. `get_wallet_funds(currency=...)` defaults to the client's `trade_currency` and can be overridden per call. `transfer()` is USDT-only.
 
 ## Client Order IDs
 
@@ -288,7 +288,7 @@ So: **single-object responses** use `order_id` / similar; **list responses** use
 
 ## Migrating
 
-See [CHANGELOG.md](CHANGELOG.md) for changed signatures (old → new form), including the removal of `leverage` from `place_order` and the v1.0.12 close-response shapes.
+See [CHANGELOG.md](CHANGELOG.md) for changed signatures (old → new form), including the deprecation of `leverage` on `place_order` (ignored, `FutureWarning`) and the v1.0.12 close-response shapes.
 
 ## License
 

@@ -96,6 +96,12 @@ class TradeClient(_HTTPClient):
         return value
 
     @staticmethod
+    def _require_id(value, name):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"'{name}' is required")
+        return value
+
+    @staticmethod
     def _asset_query(symbol=None, asset_id=None):
         """Return the ``symbol`` / ``id`` query params used by v2 endpoints."""
         if symbol and asset_id:
@@ -221,11 +227,15 @@ class TradeClient(_HTTPClient):
         takeprofit_price: Optional[Numeric] = None,
         reduce_only: bool = False,
         client_order_id: Optional[str] = None,
+        leverage: Optional[Numeric] = None,
     ):
         """Place a new futures order (``POST /fapi/v2/futures/order``).
 
         Leverage is not part of the request. Call :meth:`set_leverage` for the
         asset first, otherwise the API returns ``400 leverage not found``.
+        The ``leverage`` argument is deprecated: it is ignored (never sent)
+        and emits a ``FutureWarning``. It will be removed in the next minor
+        version.
 
         Args:
             symbol: Trading symbol (e.g. ``"BTCUSDT"``).
@@ -250,6 +260,12 @@ class TradeClient(_HTTPClient):
             Object with ``order_id``, ``position_id``, ``status``,
             ``client_order_id`` (when set), etc.
         """
+        if leverage is not None:
+            warnings.warn(
+                "leverage is ignored by place_order; use set_leverage()",
+                FutureWarning,
+                stacklevel=2,
+            )
         return self._post(
             "/futures/order",
             params=self._asset_query(symbol, asset_id),
@@ -296,7 +312,7 @@ class TradeClient(_HTTPClient):
         """
         warnings.warn(
             "get_order() is deprecated; use get_order_detail() instead.",
-            DeprecationWarning,
+            FutureWarning,
             stacklevel=2,
         )
         return self._get(f"/futures/orders/{order_id}")
@@ -330,8 +346,11 @@ class TradeClient(_HTTPClient):
             order_id: Order UUID.
 
         Returns:
-            Order-level fields plus an ``executions`` list of fills.
+            Order-level fields plus an ``executions`` list of fills. Each fill
+            has ``filled_price``, ``filled_qty``, ``filled_value``,
+            ``filled_time``, ``is_maker``, ``trading_fee`` and ``trxn_id``.
         """
+        self._require_id(order_id, "order_id")
         return self._get(f"/futures/orders/{order_id}/execution-report")
 
     def get_order_history(self, *, limit: int = 20, offset: Optional[int] = None):
@@ -664,6 +683,7 @@ class TradeClient(_HTTPClient):
             Fee details including ``role`` (``MAKER``/``TAKER``) and ``fills``
             when returned.
         """
+        self._require_id(fee_id, "fee_id")
         return self._get(f"/futures/fee/{fee_id}")
 
     # ════════════════════════════════════════════════════════════════════
@@ -675,21 +695,46 @@ class TradeClient(_HTTPClient):
         *,
         limit: Optional[int] = None,
         trade_currency: Optional[str] = None,
+        type: Optional[str] = None,
+        status: Optional[str] = None,
+        sort_by: Optional[str] = None,
+        sort_order: Optional[str] = None,
     ):
         """Get futures wallet transfer records (deposits / withdrawals).
+
+        Known backend issues: ``trade_currency`` is currently not applied by
+        the API (it returns the same rows for USDT and INR), and
+        ``status="Processing"`` currently returns no rows.
 
         Args:
             limit: Maximum number of records.
             trade_currency: ``"USDT"`` or ``"INR"``. Defaults to the client's
                 trade currency.
+            type: ``"DEPOSIT"`` or ``"WITHDRAW"`` (case-insensitive).
+            status: Passed through as given (the API accepts ``Completed``,
+                ``Processing``, ``Failed``, case-insensitive).
+            sort_by: ``"created_at"`` or ``"updated_at"``.
+            sort_order: ``"asc"`` or ``"desc"``.
         """
         if trade_currency is not None:
             self._validate_currency(trade_currency, "trade_currency")
+        if type is not None:
+            type = str(type).upper()
+            if type not in ("DEPOSIT", "WITHDRAW"):
+                raise ValueError("type must be 'DEPOSIT' or 'WITHDRAW'")
+        if sort_by is not None and sort_by not in ("created_at", "updated_at"):
+            raise ValueError("sort_by must be 'created_at' or 'updated_at'")
+        if sort_order is not None and sort_order not in ("asc", "desc"):
+            raise ValueError("sort_order must be 'asc' or 'desc'")
         return self._get(
             "/futures/transactions",
             params={
                 "limit": limit,
                 "trade_currency": trade_currency or self._trade_currency,
+                "type": type,
+                "status": status,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
             },
         )
 
@@ -697,14 +742,17 @@ class TradeClient(_HTTPClient):
     #  WALLET
     # ════════════════════════════════════════════════════════════════════
 
-    def get_wallet_funds(self, *, currency: str = "USDT"):
+    def get_wallet_funds(self, *, currency: Optional[str] = None):
         """Get spot wallet balances (total, rewards, invested, withdrawable).
 
         Args:
-            currency: ``"USDT"`` (default) or ``"INR"``. Sent as ``currency``,
-                independent of the client's ``trade_currency``.
+            currency: ``"USDT"`` or ``"INR"``. Defaults to the client's
+                ``trade_currency``. Sent as ``currency`` (not
+                ``trade_currency``).
         """
-        self._validate_currency(currency, "currency")
+        currency = self._validate_currency(
+            currency or self._trade_currency, "currency"
+        )
         return self._get("/wallet/funds", params={"currency": currency})
 
     def transfer(
@@ -719,7 +767,12 @@ class TradeClient(_HTTPClient):
             from_wallet: Source wallet — ``"SPOT"``, ``"FUTURES"``, or ``"HEDGE"``.
             to_wallet: Destination wallet — ``"SPOT"``, ``"FUTURES"``, or ``"HEDGE"``.
             amount: Transfer amount. Use a string for precision (e.g. ``"10.5"``).
+
+        Only available on USDT clients: raises ``ValueError`` without sending
+        a request when the client's ``trade_currency`` is ``"INR"``.
         """
+        if self._trade_currency == "INR":
+            raise ValueError("transfer() supports USDT only")
         return self._post(
             "/wallet/futures/transfer",
             body={

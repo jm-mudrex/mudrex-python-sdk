@@ -312,8 +312,8 @@ class TestPlaceOrder(_ClientTestBase):
         )
         self.assertNotIn("client_order_id", self.mock_request.call_args[1]["json"])
 
-    def test_leverage_rejected_and_no_request_sent(self):
-        with self.assertRaises(TypeError):
+    def test_leverage_warns_and_is_not_sent(self):
+        with self.assertWarns(FutureWarning) as ctx:
             self.client.place_order(
                 "BTCUSDT",
                 leverage="10",
@@ -321,7 +321,17 @@ class TestPlaceOrder(_ClientTestBase):
                 order_type="LONG",
                 trigger_type="MARKET",
             )
-        self.mock_request.assert_not_called()
+        self.assertIn("use set_leverage()", str(ctx.warning))
+        self.mock_request.assert_called_once()
+        self.assertNotIn("leverage", self.mock_request.call_args[1]["json"])
+
+    def test_no_warning_without_leverage(self):
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self.client.place_order(
+                "BTCUSDT", quantity="1", order_type="LONG", trigger_type="MARKET"
+            )
 
     def test_duplicate_client_order_id_surfaces_409(self):
         self.mock_request.return_value = _make_response(
@@ -631,6 +641,10 @@ class TestTransfer(_ClientTestBase):
             },
         )
 
+    def test_usdt_client_sends_request(self):
+        self.client.transfer("SPOT", "FUTURES", "1")
+        self.mock_request.assert_called_once()
+
     def test_futures_to_hedge(self):
         self.client.transfer("FUTURES", "HEDGE", "50.5")
         kwargs = self.mock_request.call_args[1]
@@ -728,6 +742,17 @@ class TestInrClient(unittest.TestCase):
         kwargs = self.mock_request.call_args[1]
         self.assertEqual(kwargs["params"], {"currency": "INR"})
 
+    def test_spot_funds_default_to_client_currency(self):
+        self.client.get_wallet_funds()
+        kwargs = self.mock_request.call_args[1]
+        self.assertEqual(kwargs["params"], {"currency": "INR"})
+
+    def test_transfer_blocked_on_inr_client(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.client.transfer("SPOT", "FUTURES", "100")
+        self.assertEqual(str(ctx.exception), "transfer() supports USDT only")
+        self.mock_request.assert_not_called()
+
 
 class TestGetOrderDetail(_ClientTestBase):
 
@@ -759,7 +784,7 @@ class TestGetOrderDetail(_ClientTestBase):
 class TestGetOrderDeprecation(_ClientTestBase):
 
     def test_get_order_warns_and_still_works(self):
-        with self.assertWarns(DeprecationWarning) as ctx:
+        with self.assertWarns(FutureWarning) as ctx:
             self.client.get_order("oid-1")
         self.assertIn("get_order_detail", str(ctx.warning))
         self._assert_called_with("GET", "/futures/orders/oid-1")
@@ -776,6 +801,18 @@ class TestExecutionReportAndFee(_ClientTestBase):
     def test_get_fee(self):
         self.client.get_fee("fee-1")
         self._assert_called_with("GET", "/fapi/v1/futures/fee/fee-1")
+
+    def test_blank_ids_raise_without_request(self):
+        for call in (
+            lambda: self.client.get_execution_report(""),
+            lambda: self.client.get_execution_report("   "),
+            lambda: self.client.get_execution_report(None),
+            lambda: self.client.get_fee(""),
+            lambda: self.client.get_fee("  "),
+        ):
+            with self.assertRaises(ValueError):
+                call()
+        self.mock_request.assert_not_called()
 
 
 class TestTransactions(_ClientTestBase):
@@ -797,6 +834,35 @@ class TestTransactions(_ClientTestBase):
     def test_invalid_override_raises_without_request(self):
         with self.assertRaises(ValueError):
             self.client.get_transactions(trade_currency="EUR")
+        self.mock_request.assert_not_called()
+
+    def test_filters_sent_when_set(self):
+        self.client.get_transactions(
+            type="deposit", status="Completed", sort_by="updated_at", sort_order="desc"
+        )
+        self._assert_called_with(
+            "GET", "/futures/transactions",
+            params={
+                "trade_currency": "USDT",
+                "type": "DEPOSIT",
+                "status": "Completed",
+                "sort_by": "updated_at",
+                "sort_order": "desc",
+            },
+        )
+
+    def test_status_passed_through_unchanged(self):
+        self.client.get_transactions(status="processing")
+        self.assertEqual(self.mock_request.call_args[1]["params"]["status"], "processing")
+
+    def test_invalid_filters_raise_without_request(self):
+        for kwargs in (
+            {"type": "TRANSFER"},
+            {"sort_by": "amount"},
+            {"sort_order": "up"},
+        ):
+            with self.assertRaises(ValueError):
+                self.client.get_transactions(**kwargs)
         self.mock_request.assert_not_called()
 
 
@@ -833,6 +899,13 @@ class TestWalletFundsCurrency(_ClientTestBase):
         with self.assertRaises(ValueError):
             self.client.get_wallet_funds(currency="EUR")
         self.mock_request.assert_not_called()
+
+    def test_explicit_usdt_on_inr_client(self):
+        with patch.object(TradeClient, "_ping"):
+            inr = TradeClient(api_secret="s", trade_currency="INR")
+        with patch.object(inr._session, "request", self.mock_request):
+            inr.get_wallet_funds(currency="USDT")
+            self.assertEqual(self.mock_request.call_args[1]["params"], {"currency": "USDT"})
 
 
 class TestParityParams(_ClientTestBase):
