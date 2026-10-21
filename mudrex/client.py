@@ -1,8 +1,11 @@
+import warnings
 from typing import Optional, Union
 
 from ._http import _HTTPClient
 
 Numeric = Union[str, int, float]
+
+SUPPORTED_CURRENCIES = ("USDT", "INR")
 
 
 class TradeClient(_HTTPClient):
@@ -20,8 +23,8 @@ class TradeClient(_HTTPClient):
     Args:
         api_secret: Your Mudrex API secret.             
             Falls back to the ``MUDREX_API_SECRET`` environment variable.
-        trade_currency: Trade currency for this client. Only ``"USDT"`` is
-            supported; default is ``"USDT"``.
+        trade_currency: Trade currency for this client: ``"USDT"`` (default)
+            or ``"INR"``.
         timeout: Request timeout in seconds (default ``10``).
         max_retries: Retries on transient network errors (default ``3``).
         log_requests: Emit debug logs for every request/response (default ``False``).
@@ -31,10 +34,10 @@ class TradeClient(_HTTPClient):
         from mudrex import TradeClient
 
         client = TradeClient(api_secret="your_secret")
+        client.set_leverage("BTCUSDT", leverage="10")  # leverage is set first
         client.place_order(
             "BTCUSDT",
-            leverage="10",   # use string for precision
-            quantity="0.001",
+            quantity="0.001",   # use string for precision
             order_type="LONG",
             trigger_type="MARKET",
         )
@@ -55,11 +58,9 @@ class TradeClient(_HTTPClient):
             max_retries=max_retries,
             log_requests=log_requests,
         )
-        if trade_currency != "USDT":
-            raise ValueError(
-                "Only USDT is supported as trade currency. Use trade_currency='USDT' (default)."
-            )
-        self._trade_currency = trade_currency
+        self._trade_currency = self._validate_currency(
+            trade_currency, "trade_currency"
+        )
         self._ping()
 
     def ping(self):
@@ -83,6 +84,25 @@ class TradeClient(_HTTPClient):
         if symbol:
             return symbol, {"is_symbol": "true"}
         return asset_id, {}
+
+    @staticmethod
+    def _validate_currency(value, name):
+        if value not in SUPPORTED_CURRENCIES:
+            raise ValueError(
+                f"Unsupported {name} {value!r}. Use one of: "
+                + ", ".join(SUPPORTED_CURRENCIES)
+                + "."
+            )
+        return value
+
+    @staticmethod
+    def _asset_query(symbol=None, asset_id=None):
+        """Return the ``symbol`` / ``id`` query params used by v2 endpoints."""
+        if symbol and asset_id:
+            raise ValueError("Provide either 'symbol' or 'asset_id', not both")
+        if not symbol and not asset_id:
+            raise ValueError("Either 'symbol' or 'asset_id' is required")
+        return {"symbol": symbol} if symbol else {"id": asset_id}
 
     # ════════════════════════════════════════════════════════════════════
     #  FUTURES / ASSETS
@@ -191,7 +211,6 @@ class TradeClient(_HTTPClient):
         symbol: Optional[str] = None,
         *,
         asset_id: Optional[str] = None,
-        leverage: Numeric,
         quantity: Numeric,
         order_type: str,
         trigger_type: str,
@@ -201,13 +220,16 @@ class TradeClient(_HTTPClient):
         stoploss_price: Optional[Numeric] = None,
         takeprofit_price: Optional[Numeric] = None,
         reduce_only: bool = False,
+        client_order_id: Optional[str] = None,
     ):
-        """Place a new futures order.
+        """Place a new futures order (``POST /fapi/v2/futures/order``).
+
+        Leverage is not part of the request. Call :meth:`set_leverage` for the
+        asset first, otherwise the API returns ``400 leverage not found``.
 
         Args:
             symbol: Trading symbol (e.g. ``"BTCUSDT"``).
             asset_id: Asset UUID (alternative to symbol).
-            leverage: Leverage value.
             quantity: Order quantity.
             order_type: ``"LONG"`` or ``"SHORT"``.
             trigger_type: ``"MARKET"`` or ``"LIMIT"``.
@@ -217,13 +239,21 @@ class TradeClient(_HTTPClient):
             stoploss_price: Stop-loss trigger price (required when ``is_stoploss=True``).
             takeprofit_price: Take-profit trigger price (required when ``is_takeprofit=True``).
             reduce_only: If ``True``, order can only reduce/close an existing position.
+            client_order_id: Optional caller-chosen id (letters, digits, ``-``,
+                ``_``; max 64 chars). Returned in the response. An invalid
+                format raises ``MudrexAPIError`` (400); reusing an accepted id
+                raises ``MudrexAPIError`` (409). The SDK never retries a place.
+                If a response is lost, call :meth:`get_order_detail` with the
+                ``client_order_id`` before deciding to place again.
+
+        Returns:
+            Object with ``order_id``, ``position_id``, ``status``,
+            ``client_order_id`` (when set), etc.
         """
-        identifier, params = self._resolve_asset(symbol, asset_id)
         return self._post(
-            f"/futures/{identifier}/order",
-            params=params,
+            "/futures/order",
+            params=self._asset_query(symbol, asset_id),
             body={
-                "leverage": leverage,
                 "quantity": quantity,
                 "order_type": order_type,
                 "trigger_type": trigger_type,
@@ -234,7 +264,9 @@ class TradeClient(_HTTPClient):
                 "takeprofit_price": takeprofit_price,
                 "reduce_only": reduce_only,
                 "trade_currency": self._trade_currency,
+                "client_order_id": client_order_id,
             },
+            version="v2",
         )
 
     def get_orders(self, *, limit: int = 20, offset: Optional[int] = None):
@@ -256,10 +288,51 @@ class TradeClient(_HTTPClient):
     def get_order(self, order_id: str):
         """Get a single order by ID.
 
+        .. deprecated::
+            Use :meth:`get_order_detail`, the documented single-order read.
+
         Args:
             order_id: Order UUID.
         """
+        warnings.warn(
+            "get_order() is deprecated; use get_order_detail() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return self._get(f"/futures/orders/{order_id}")
+
+    def get_order_detail(
+        self,
+        order_id: Optional[str] = None,
+        *,
+        client_order_id: Optional[str] = None,
+    ):
+        """Get a single order by Mudrex UUID and/or ``client_order_id``.
+
+        Provide at least one. If both are given they must refer to the same
+        order, otherwise the API returns 404.
+
+        Args:
+            order_id: Order UUID.
+            client_order_id: Caller-chosen id set at placement.
+        """
+        if not order_id and not client_order_id:
+            raise ValueError("Either 'order_id' or 'client_order_id' is required")
+        return self._get(
+            "/futures/orders/detail",
+            params={"order_id": order_id, "client_order_id": client_order_id},
+        )
+
+    def get_execution_report(self, order_id: str):
+        """Get the execution report (per-fill detail) for an order.
+
+        Args:
+            order_id: Order UUID.
+
+        Returns:
+            Order-level fields plus an ``executions`` list of fills.
+        """
+        return self._get(f"/futures/orders/{order_id}/execution-report")
 
     def get_order_history(self, *, limit: int = 20, offset: Optional[int] = None):
         """Get order history (filled, partially filled, cancelled).
@@ -282,6 +355,7 @@ class TradeClient(_HTTPClient):
         order_id: str,
         *,
         order_price: Optional[Numeric] = None,
+        quantity: Optional[Numeric] = None,
         is_stoploss: Optional[bool] = None,
         is_takeprofit: Optional[bool] = None,
         stoploss_price: Optional[Numeric] = None,
@@ -291,9 +365,15 @@ class TradeClient(_HTTPClient):
     ):
         """Amend an existing limit order.
 
+        Per the API docs, ``order_price`` and ``quantity`` are both required
+        when amending the order itself; a price-only amend is documented to
+        return 400. The SDK sends exactly what you pass and surfaces the API
+        response unchanged.
+
         Args:
             order_id: Order UUID.
             order_price: New limit price.
+            quantity: New quantity (base asset).
             is_stoploss: Set/update stop-loss.
             is_takeprofit: Set/update take-profit.
             stoploss_price: New stop-loss price.
@@ -305,6 +385,7 @@ class TradeClient(_HTTPClient):
             f"/futures/orders/{order_id}",
             body={
                 "order_price": order_price,
+                "quantity": quantity,
                 "is_stoploss": is_stoploss,
                 "is_takeprofit": is_takeprofit,
                 "stoploss_price": stoploss_price,
@@ -314,12 +395,29 @@ class TradeClient(_HTTPClient):
             },
         )
 
-    def cancel_order(self, order_id: str):
-        """Cancel an open order.
+    def cancel_order(
+        self,
+        order_id: Optional[str] = None,
+        *,
+        client_order_id: Optional[str] = None,
+    ):
+        """Cancel an open order by UUID or by ``client_order_id``.
+
+        Pass exactly one. Cancel by UUID uses ``DELETE /futures/orders/{order_id}``;
+        cancel by client id uses ``DELETE /futures/orders?client_order_id=...``.
 
         Args:
             order_id: Order UUID.
+            client_order_id: Caller-chosen id set at placement.
         """
+        if bool(order_id) == bool(client_order_id):
+            raise ValueError(
+                "Provide exactly one of 'order_id' or 'client_order_id'"
+            )
+        if client_order_id:
+            return self._delete(
+                "/futures/orders", params={"client_order_id": client_order_id}
+            )
         return self._delete(f"/futures/orders/{order_id}")
 
     # ════════════════════════════════════════════════════════════════════
@@ -329,11 +427,14 @@ class TradeClient(_HTTPClient):
     def get_positions(self, *, limit: int = 20, offset: Optional[int] = None):
         """Get open positions.
 
+        Each item has ``id`` and, as of API v1.0.12, ``position_id`` (same
+        value). Returns an empty list when there are no open positions.
+
         Args:
             limit: Number of results (default 20).
             offset: Offset timestamp in milliseconds for pagination.
         """
-        return self._get(
+        result = self._get(
             "/futures/positions",
             params={
                 "limit": limit,
@@ -341,9 +442,15 @@ class TradeClient(_HTTPClient):
                 "trade_currency": self._trade_currency,
             },
         )
+        # The API sends ``data: null`` when there are no open positions.
+        return [] if result is None else result
 
     def get_position_history(self, *, limit: int = 20, offset: Optional[int] = None):
         """Get closed/liquidated position history.
+
+        Each row's ``id`` is the history-row UUID, **not** the position UUID.
+        Use the row's ``position_id`` for the position and ``order_id`` for
+        the order that closed it (API v1.0.12).
 
         Args:
             limit: Number of results (default 20).
@@ -363,6 +470,11 @@ class TradeClient(_HTTPClient):
 
         Args:
             position_id: Position UUID.
+
+        Returns:
+            Object with ``order_id`` (the close order UUID) and ``position_id``
+            (the position UUID). Before API v1.0.12 ``position_id`` held the
+            close order UUID; read ``order_id`` for it now.
         """
         return self._post(f"/futures/positions/{position_id}/close")
 
@@ -373,14 +485,21 @@ class TradeClient(_HTTPClient):
         quantity: Numeric,
         order_type: str,
         limit_price: Optional[Numeric] = None,
+        client_order_id: Optional[str] = None,
     ):
         """Partially close a position.
 
         Args:
             position_id: Position UUID.
             quantity: Quantity to close.
-            order_type: ``"LONG"`` or ``"SHORT"`` (opposite of position direction).
+            order_type: ``"MARKET"`` or ``"LIMIT"``.
             limit_price: Limit price for a limit close (optional).
+            client_order_id: Optional id applied to the generated close order
+                (not the original order or the position).
+
+        Returns:
+            Object with ``order_id`` (close order UUID), ``position_id`` and
+            ``quantity`` (API v1.0.12; this was ``True`` before).
         """
         return self._post(
             f"/futures/positions/{position_id}/close/partial",
@@ -388,6 +507,7 @@ class TradeClient(_HTTPClient):
                 "quantity": quantity,
                 "order_type": order_type,
                 "limit_price": limit_price,
+                "client_order_id": client_order_id,
             },
         )
 
@@ -407,6 +527,8 @@ class TradeClient(_HTTPClient):
         is_takeprofit: bool = False,
         stoploss_price: Optional[Numeric] = None,
         takeprofit_price: Optional[Numeric] = None,
+        stoploss_client_order_id: Optional[str] = None,
+        takeprofit_client_order_id: Optional[str] = None,
     ):
         """Place stop-loss and/or take-profit on a position.
 
@@ -418,6 +540,8 @@ class TradeClient(_HTTPClient):
             is_takeprofit: Place a take-profit order.
             stoploss_price: Trigger price (required when ``is_stoploss=True``).
             takeprofit_price: Trigger price (required when ``is_takeprofit=True``).
+            stoploss_client_order_id: Optional id to set on the new stop-loss order.
+            takeprofit_client_order_id: Optional id to set on the new take-profit order.
         """
         return self._post(
             f"/futures/positions/{position_id}/riskorder",
@@ -426,6 +550,8 @@ class TradeClient(_HTTPClient):
                 "is_takeprofit": is_takeprofit,
                 "stoploss_price": stoploss_price,
                 "takeprofit_price": takeprofit_price,
+                "stoploss_client_order_id": stoploss_client_order_id,
+                "takeprofit_client_order_id": takeprofit_client_order_id,
             },
         )
 
@@ -439,8 +565,14 @@ class TradeClient(_HTTPClient):
         takeprofit_order_id: Optional[str] = None,
         stoploss_price: Optional[Numeric] = None,
         takeprofit_price: Optional[Numeric] = None,
+        stoploss_client_order_id: Optional[str] = None,
+        takeprofit_client_order_id: Optional[str] = None,
+        trigger_type: Optional[str] = None,
     ):
         """Amend existing risk orders (stop-loss / take-profit) on a position.
+
+        On edit, the ``*_client_order_id`` arguments only *locate* an existing
+        risk order; they cannot set or change its id.
 
         Args:
             position_id: Position UUID.
@@ -450,6 +582,9 @@ class TradeClient(_HTTPClient):
             takeprofit_order_id: Existing take-profit order UUID.
             stoploss_price: New stop-loss trigger price.
             takeprofit_price: New take-profit trigger price.
+            stoploss_client_order_id: Locate the stop-loss by client order id.
+            takeprofit_client_order_id: Locate the take-profit by client order id.
+            trigger_type: ``"MARKET"`` or ``"LIMIT"`` (optional).
         """
         return self._patch(
             f"/futures/positions/{position_id}/riskorder",
@@ -460,6 +595,9 @@ class TradeClient(_HTTPClient):
                 "takeprofit_order_id": takeprofit_order_id,
                 "stoploss_price": stoploss_price,
                 "takeprofit_price": takeprofit_price,
+                "stoploss_client_order_id": stoploss_client_order_id,
+                "takeprofit_client_order_id": takeprofit_client_order_id,
+                "trigger_type": trigger_type,
             },
         )
 
@@ -516,13 +654,58 @@ class TradeClient(_HTTPClient):
             },
         )
 
+    def get_fee(self, fee_id: str):
+        """Get a single fee record by id.
+
+        Args:
+            fee_id: Fee UUID, taken from an ``id`` in :meth:`get_fee_history`.
+
+        Returns:
+            Fee details including ``role`` (``MAKER``/``TAKER``) and ``fills``
+            when returned.
+        """
+        return self._get(f"/futures/fee/{fee_id}")
+
+    # ════════════════════════════════════════════════════════════════════
+    #  TRANSACTIONS
+    # ════════════════════════════════════════════════════════════════════
+
+    def get_transactions(
+        self,
+        *,
+        limit: Optional[int] = None,
+        trade_currency: Optional[str] = None,
+    ):
+        """Get futures wallet transfer records (deposits / withdrawals).
+
+        Args:
+            limit: Maximum number of records.
+            trade_currency: ``"USDT"`` or ``"INR"``. Defaults to the client's
+                trade currency.
+        """
+        if trade_currency is not None:
+            self._validate_currency(trade_currency, "trade_currency")
+        return self._get(
+            "/futures/transactions",
+            params={
+                "limit": limit,
+                "trade_currency": trade_currency or self._trade_currency,
+            },
+        )
+
     # ════════════════════════════════════════════════════════════════════
     #  WALLET
     # ════════════════════════════════════════════════════════════════════
 
-    def get_wallet_funds(self):
-        """Get spot wallet balances (total, rewards, invested, withdrawable)."""
-        return self._get("/wallet/funds")
+    def get_wallet_funds(self, *, currency: str = "USDT"):
+        """Get spot wallet balances (total, rewards, invested, withdrawable).
+
+        Args:
+            currency: ``"USDT"`` (default) or ``"INR"``. Sent as ``currency``,
+                independent of the client's ``trade_currency``.
+        """
+        self._validate_currency(currency, "currency")
+        return self._get("/wallet/funds", params={"currency": currency})
 
     def transfer(
         self,

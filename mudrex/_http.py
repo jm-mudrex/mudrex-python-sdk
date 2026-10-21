@@ -104,8 +104,8 @@ class _HTTPClient:
 
     # ── request / response ──────────────────────────────────────────────
 
-    def _request(self, method, path, params=None, body=None):
-        url = f"{BASE_URL}/fapi/v1{path}"
+    def _request(self, method, path, params=None, body=None, version="v1"):
+        url = f"{BASE_URL}/fapi/{version}{path}"
         params = self._clean_params(params)
         body = self._prepare_body(body)
 
@@ -165,6 +165,17 @@ class _HTTPClient:
         return (f"Request failed with status {status_code}", status_code)
 
     @staticmethod
+    def _retry_after(response):
+        """Return the ``Retry-After`` header as int seconds, or ``None``."""
+        headers = getattr(response, "headers", None)
+        if headers is None:
+            return None
+        try:
+            return int(str(headers.get("Retry-After")).strip())
+        except (TypeError, ValueError, AttributeError):
+            return None
+
+    @staticmethod
     def _handle_response(response):
         raw_text = (response.text or "").strip()
         status = response.status_code
@@ -178,6 +189,7 @@ class _HTTPClient:
                     message="API rate limit exceeded",
                     code=429,
                     response=response,
+                    retry_after=_HTTPClient._retry_after(response),
                 )
             raise MudrexAPIError(
                 message=f"Empty response body (HTTP {status})",
@@ -194,6 +206,7 @@ class _HTTPClient:
                     message="API rate limit exceeded",
                     code=429,
                     response=response,
+                    retry_after=_HTTPClient._retry_after(response),
                 )
             raise MudrexAPIError(
                 message=f"Invalid JSON response: {raw_text[:200]}",
@@ -204,7 +217,12 @@ class _HTTPClient:
         if status >= 400 or not data.get("success", False):
             message, code = _HTTPClient._parse_error_payload(data, status)
             raise MudrexAPIError(
-                message=message, code=code, response=response
+                message=message,
+                code=code,
+                response=response,
+                retry_after=(
+                    _HTTPClient._retry_after(response) if status == 429 else None
+                ),
             )
 
         result = data.get("data")
@@ -215,15 +233,18 @@ class _HTTPClient:
                 MudrexResponse(item) if isinstance(item, dict) else item
                 for item in result
             ]
-        return MudrexResponse({"result": result})
+        # ``None`` (data: null) and scalars (e.g. a price string) are returned as-is.
+        return result
 
     # ── convenience verbs ───────────────────────────────────────────────
 
     def _get(self, path, params=None):
         return self._request("GET", path, params=params)
 
-    def _post(self, path, params=None, body=None):
-        return self._request("POST", path, params=params, body=body)
+    def _post(self, path, params=None, body=None, version="v1"):
+        return self._request(
+            "POST", path, params=params, body=body, version=version
+        )
 
     def _patch(self, path, params=None, body=None):
         return self._request("PATCH", path, params=params, body=body)

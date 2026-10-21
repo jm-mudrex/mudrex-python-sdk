@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
-from mudrex import TradeClient
+from mudrex import MudrexAPIError, TradeClient
 from mudrex._types import MudrexResponse
 
 
@@ -67,10 +67,17 @@ class TestClientInit(unittest.TestCase):
         self.assertEqual(c._trade_currency, "USDT")
 
     @patch.object(TradeClient, "_ping")
-    def test_non_usdt_trade_currency_raises(self, _):
+    def test_inr_trade_currency_accepted(self, mock_ping):
+        c = TradeClient(api_secret="s", trade_currency="INR")
+        self.assertEqual(c._trade_currency, "INR")
+        mock_ping.assert_called_once()
+
+    @patch.object(TradeClient, "_ping")
+    def test_invalid_trade_currency_raises_before_ping(self, mock_ping):
         with self.assertRaises(ValueError) as ctx:
-            TradeClient(api_secret="s", trade_currency="INR")
-        self.assertIn("Only USDT", str(ctx.exception))
+            TradeClient(api_secret="s", trade_currency="EUR")
+        self.assertIn("Unsupported trade_currency", str(ctx.exception))
+        mock_ping.assert_not_called()
 
     @patch.object(TradeClient, "_ping")
     def test_ping_called_on_init(self, mock_ping):
@@ -218,16 +225,14 @@ class TestPlaceOrder(_ClientTestBase):
     def test_market_order(self):
         self.client.place_order(
             "BTCUSDT",
-            leverage="10",
             quantity="0.001",
             order_type="LONG",
             trigger_type="MARKET",
         )
         self._assert_called_with(
-            "POST", "/futures/BTCUSDT/order",
-            params={"is_symbol": "true"},
+            "POST", "/fapi/v2/futures/order",
+            params={"symbol": "BTCUSDT"},
             body={
-                "leverage": "10",
                 "quantity": "0.001",
                 "order_type": "LONG",
                 "trigger_type": "MARKET",
@@ -241,7 +246,6 @@ class TestPlaceOrder(_ClientTestBase):
     def test_limit_order_with_sl_tp(self):
         self.client.place_order(
             "ETHUSDT",
-            leverage="5",
             quantity="0.1",
             order_type="SHORT",
             trigger_type="LIMIT",
@@ -262,19 +266,17 @@ class TestPlaceOrder(_ClientTestBase):
     def test_by_asset_id(self):
         self.client.place_order(
             asset_id="uuid-btc",
-            leverage="10",
             quantity="0.001",
             order_type="LONG",
             trigger_type="MARKET",
         )
         kwargs = self.mock_request.call_args[1]
-        self.assertIn("/futures/uuid-btc/order", kwargs["url"])
-        self.assertIsNone(kwargs["params"])
+        self.assertTrue(kwargs["url"].endswith("/fapi/v2/futures/order"))
+        self.assertEqual(kwargs["params"], {"id": "uuid-btc"})
 
     def test_reduce_only(self):
         self.client.place_order(
             "BTCUSDT",
-            leverage="10",
             quantity="0.001",
             order_type="SHORT",
             trigger_type="MARKET",
@@ -287,13 +289,54 @@ class TestPlaceOrder(_ClientTestBase):
         """Client sends default trade_currency USDT in order body."""
         self.client.place_order(
             "BTCUSDT",
-            leverage="10",
             quantity="0.001",
             order_type="LONG",
             trigger_type="MARKET",
         )
         kwargs = self.mock_request.call_args[1]
         self.assertEqual(kwargs["json"]["trade_currency"], "USDT")
+
+    def test_client_order_id_sent(self):
+        self.client.place_order(
+            "BTCUSDT",
+            quantity="0.001",
+            order_type="LONG",
+            trigger_type="MARKET",
+            client_order_id="my-order-123",
+        )
+        kwargs = self.mock_request.call_args[1]
+        self.assertEqual(kwargs["json"]["client_order_id"], "my-order-123")
+
+    def test_client_order_id_omitted_when_unset(self):
+        self.client.place_order(
+            "BTCUSDT", quantity="1", order_type="LONG", trigger_type="MARKET"
+        )
+        self.assertNotIn("client_order_id", self.mock_request.call_args[1]["json"])
+
+    def test_leverage_rejected_and_no_request_sent(self):
+        with self.assertRaises(TypeError):
+            self.client.place_order(
+                "BTCUSDT",
+                leverage="10",
+                quantity="0.001",
+                order_type="LONG",
+                trigger_type="MARKET",
+            )
+        self.mock_request.assert_not_called()
+
+    def test_duplicate_client_order_id_surfaces_409(self):
+        self.mock_request.return_value = _make_response(
+            409,
+            {"success": False, "errors": [{"code": 409, "text": "client order id already exists"}]},
+        )
+        with self.assertRaises(MudrexAPIError) as ctx:
+            self.client.place_order(
+                "BTCUSDT", quantity="1", order_type="LONG",
+                trigger_type="MARKET", client_order_id="dup",
+            )
+        self.assertEqual(ctx.exception.code, 409)
+        self.assertIn("already exists", ctx.exception.message)
+        self.mock_request.assert_called_once()  # no auto-retry
 
 
 class TestGetOrders(_ClientTestBase):
@@ -529,8 +572,7 @@ class TestGetLiquidationPrice(_ClientTestBase):
             "GET", "/futures/positions/pid-1/liq-price",
             params={"trade_currency": "USDT"},
         )
-        self.assertIsInstance(result, MudrexResponse)
-        self.assertEqual(result.result, "62888.3")
+        self.assertEqual(result, "62888.3")
 
     def test_with_ext_margin(self):
         self._set_response(SUCCESS_SCALAR)
@@ -612,10 +654,10 @@ class TestTradeCurrencyLock(_ClientTestBase):
         kwargs = self.mock_request.call_args[1]
         self.assertEqual(kwargs["params"]["trade_currency"], "USDT")
 
-    def test_non_usdt_raises(self):
+    def test_invalid_currency_raises(self):
         with patch.object(TradeClient, "_ping"):
             with self.assertRaises(ValueError):
-                TradeClient(api_secret="s", trade_currency="INR")
+                TradeClient(api_secret="s", trade_currency="EUR")
 
     def test_all_currency_endpoints_use_client_currency(self):
         """Every method that sends trade_currency should use the client's value (USDT)."""
@@ -623,7 +665,7 @@ class TestTradeCurrencyLock(_ClientTestBase):
             lambda c: c.get_available_funds(),
             lambda c: c.get_leverage("BTCUSDT"),
             lambda c: c.set_leverage("BTCUSDT", leverage="10"),
-            lambda c: c.place_order("BTCUSDT", leverage="10", quantity="0.001",
+            lambda c: c.place_order("BTCUSDT", quantity="0.001",
                                     order_type="LONG", trigger_type="MARKET"),
             lambda c: c.get_orders(),
             lambda c: c.get_order_history(),
@@ -631,6 +673,7 @@ class TestTradeCurrencyLock(_ClientTestBase):
             lambda c: c.get_position_history(),
             lambda c: c.get_fee_history(),
             lambda c: c.get_liquidation_price("pid"),
+            lambda c: c.get_transactions(),
         ]
 
         for method_fn in methods:
@@ -643,6 +686,217 @@ class TestTradeCurrencyLock(_ClientTestBase):
                 sent_tc, "USDT",
                 f"Expected USDT but got {sent_tc} for {kwargs['url']}"
             )
+
+
+class TestInrClient(unittest.TestCase):
+    """An INR client sends trade_currency=INR wherever the API takes it."""
+
+    def setUp(self):
+        with patch.object(TradeClient, "_ping"):
+            self.client = TradeClient(api_secret="s", trade_currency="INR")
+        self.mock_request = MagicMock(return_value=_make_response(200, SUCCESS_DICT))
+        patcher = patch.object(self.client._session, "request", self.mock_request)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _sent_currency(self):
+        kwargs = self.mock_request.call_args[1]
+        return (kwargs.get("params") or {}).get("trade_currency") or \
+               (kwargs.get("json") or {}).get("trade_currency")
+
+    def test_endpoints_send_inr(self):
+        methods = [
+            lambda c: c.get_available_funds(),
+            lambda c: c.get_leverage("BTCUSDT"),
+            lambda c: c.set_leverage("BTCUSDT", leverage="10"),
+            lambda c: c.place_order("BTCUSDT", quantity="1", order_type="LONG",
+                                    trigger_type="MARKET"),
+            lambda c: c.get_orders(),
+            lambda c: c.get_order_history(),
+            lambda c: c.get_positions(),
+            lambda c: c.get_position_history(),
+            lambda c: c.get_fee_history(),
+            lambda c: c.get_liquidation_price("pid"),
+            lambda c: c.get_transactions(),
+        ]
+        for fn in methods:
+            self.mock_request.reset_mock()
+            fn(self.client)
+            self.assertEqual(self._sent_currency(), "INR")
+
+    def test_spot_funds_do_not_send_trade_currency(self):
+        self.client.get_wallet_funds(currency="INR")
+        kwargs = self.mock_request.call_args[1]
+        self.assertEqual(kwargs["params"], {"currency": "INR"})
+
+
+class TestGetOrderDetail(_ClientTestBase):
+
+    def test_by_order_id(self):
+        self.client.get_order_detail("oid-1")
+        self._assert_called_with(
+            "GET", "/fapi/v1/futures/orders/detail", params={"order_id": "oid-1"}
+        )
+
+    def test_by_client_order_id(self):
+        self.client.get_order_detail(client_order_id="cid-1")
+        self._assert_called_with(
+            "GET", "/futures/orders/detail", params={"client_order_id": "cid-1"}
+        )
+
+    def test_both_ids(self):
+        self.client.get_order_detail("oid-1", client_order_id="cid-1")
+        self._assert_called_with(
+            "GET", "/futures/orders/detail",
+            params={"order_id": "oid-1", "client_order_id": "cid-1"},
+        )
+
+    def test_neither_raises_without_request(self):
+        with self.assertRaises(ValueError):
+            self.client.get_order_detail()
+        self.mock_request.assert_not_called()
+
+
+class TestGetOrderDeprecation(_ClientTestBase):
+
+    def test_get_order_warns_and_still_works(self):
+        with self.assertWarns(DeprecationWarning) as ctx:
+            self.client.get_order("oid-1")
+        self.assertIn("get_order_detail", str(ctx.warning))
+        self._assert_called_with("GET", "/futures/orders/oid-1")
+
+
+class TestExecutionReportAndFee(_ClientTestBase):
+
+    def test_execution_report(self):
+        self.client.get_execution_report("oid-1")
+        self._assert_called_with(
+            "GET", "/fapi/v1/futures/orders/oid-1/execution-report"
+        )
+
+    def test_get_fee(self):
+        self.client.get_fee("fee-1")
+        self._assert_called_with("GET", "/fapi/v1/futures/fee/fee-1")
+
+
+class TestTransactions(_ClientTestBase):
+
+    def test_defaults_to_client_currency(self):
+        self.client.get_transactions()
+        self._assert_called_with(
+            "GET", "/fapi/v1/futures/transactions",
+            params={"trade_currency": "USDT"},
+        )
+
+    def test_limit_and_override(self):
+        self.client.get_transactions(limit=5, trade_currency="INR")
+        self._assert_called_with(
+            "GET", "/futures/transactions",
+            params={"limit": 5, "trade_currency": "INR"},
+        )
+
+    def test_invalid_override_raises_without_request(self):
+        with self.assertRaises(ValueError):
+            self.client.get_transactions(trade_currency="EUR")
+        self.mock_request.assert_not_called()
+
+
+class TestCancelByClientOrderId(_ClientTestBase):
+
+    def test_by_client_order_id(self):
+        self.client.cancel_order(client_order_id="cid-1")
+        self._assert_called_with(
+            "DELETE", "/fapi/v1/futures/orders", params={"client_order_id": "cid-1"}
+        )
+        self.assertTrue(
+            self.mock_request.call_args[1]["url"].endswith("/futures/orders")
+        )
+
+    def test_requires_exactly_one(self):
+        with self.assertRaises(ValueError):
+            self.client.cancel_order()
+        with self.assertRaises(ValueError):
+            self.client.cancel_order("oid", client_order_id="cid")
+        self.mock_request.assert_not_called()
+
+
+class TestWalletFundsCurrency(_ClientTestBase):
+
+    def test_default_usdt(self):
+        self.client.get_wallet_funds()
+        self._assert_called_with("GET", "/wallet/funds", params={"currency": "USDT"})
+
+    def test_inr(self):
+        self.client.get_wallet_funds(currency="INR")
+        self._assert_called_with("GET", "/wallet/funds", params={"currency": "INR"})
+
+    def test_invalid_raises_without_request(self):
+        with self.assertRaises(ValueError):
+            self.client.get_wallet_funds(currency="EUR")
+        self.mock_request.assert_not_called()
+
+
+class TestParityParams(_ClientTestBase):
+
+    def test_amend_quantity(self):
+        self.client.amend_order("oid", order_price="100", quantity="2")
+        self._assert_called_with(
+            "PATCH", "/futures/orders/oid", body={"order_price": "100", "quantity": "2"}
+        )
+
+    def test_partial_close_client_order_id(self):
+        self.client.close_position_partial(
+            "pid", quantity="1", order_type="MARKET", client_order_id="cid"
+        )
+        self._assert_called_with(
+            "POST", "/futures/positions/pid/close/partial",
+            body={"quantity": "1", "order_type": "MARKET", "client_order_id": "cid"},
+        )
+
+    def test_place_risk_order_client_ids(self):
+        self.client.place_risk_order(
+            "pid", is_stoploss=True, stoploss_price="90",
+            stoploss_client_order_id="sl-1", takeprofit_client_order_id="tp-1",
+        )
+        body = self.mock_request.call_args[1]["json"]
+        self.assertEqual(body["stoploss_client_order_id"], "sl-1")
+        self.assertEqual(body["takeprofit_client_order_id"], "tp-1")
+
+    def test_amend_risk_order_client_ids_and_trigger_type(self):
+        self.client.amend_risk_order(
+            "pid", is_stoploss=True, stoploss_price="91",
+            stoploss_client_order_id="sl-1", trigger_type="MARKET",
+        )
+        body = self.mock_request.call_args[1]["json"]
+        self.assertEqual(body["stoploss_client_order_id"], "sl-1")
+        self.assertEqual(body["trigger_type"], "MARKET")
+
+    def test_amend_risk_order_omits_trigger_type_by_default(self):
+        self.client.amend_risk_order("pid", is_stoploss=True, stoploss_price="91")
+        self.assertNotIn("trigger_type", self.mock_request.call_args[1]["json"])
+
+
+class TestV1012ResponseShapes(_ClientTestBase):
+
+    def test_empty_positions_returns_empty_list(self):
+        self._set_response({"success": True, "data": None})
+        self.assertEqual(self.client.get_positions(), [])
+
+    def test_partial_close_object_fields_read_directly(self):
+        self._set_response({
+            "success": True,
+            "data": {"order_id": "o", "position_id": "p", "quantity": "1"},
+        })
+        resp = self.client.close_position_partial(
+            "p", quantity="1", order_type="MARKET"
+        )
+        self.assertEqual(resp.order_id, "o")
+        self.assertEqual(resp.position_id, "p")
+
+    def test_square_off_returns_order_and_position_ids(self):
+        self._set_response({"success": True, "data": {"order_id": "o", "position_id": "p"}})
+        resp = self.client.close_position("p")
+        self.assertEqual((resp.order_id, resp.position_id), ("o", "p"))
 
 
 if __name__ == "__main__":

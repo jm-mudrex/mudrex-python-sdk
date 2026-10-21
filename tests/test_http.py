@@ -135,17 +135,17 @@ class TestHandleResponse(unittest.TestCase):
         self.assertEqual(len(result), 2)
         self.assertIsInstance(result[0], MudrexResponse)
 
-    def test_success_scalar_wrapped_in_response(self):
+    def test_success_scalar_returned_as_is(self):
         resp = _make_response(200, {"success": True, "data": "62888.3"})
-        result = _HTTPClient._handle_response(resp)
-        self.assertIsInstance(result, MudrexResponse)
-        self.assertEqual(result.result, "62888.3")
+        self.assertEqual(_HTTPClient._handle_response(resp), "62888.3")
 
-    def test_success_none_data_wrapped_in_response(self):
+    def test_success_none_data_returns_none(self):
         resp = _make_response(200, {"success": True, "data": None})
-        result = _HTTPClient._handle_response(resp)
-        self.assertIsInstance(result, MudrexResponse)
-        self.assertIsNone(result.result)
+        self.assertIsNone(_HTTPClient._handle_response(resp))
+
+    def test_success_bool_data_returned_as_is(self):
+        resp = _make_response(200, {"success": True, "data": True})
+        self.assertIs(_HTTPClient._handle_response(resp), True)
 
     def test_api_error_with_errors_array(self):
         resp = _make_response(400, {
@@ -231,6 +231,50 @@ class TestHandleResponse(unittest.TestCase):
             _HTTPClient._handle_response(resp)
         self.assertEqual(ctx.exception.code, 429)
         self.assertEqual(ctx.exception.message, "API rate limit exceeded")
+
+    def test_429_json_body_exposes_retry_after(self):
+        resp = _make_response(429, {
+            "success": False,
+            "errors": [{"code": 5002, "text": "API rate limit exceeded"}],
+        })
+        resp.headers = {"Retry-After": "7"}
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertEqual(ctx.exception.retry_after, 7)
+
+    def test_429_empty_body_exposes_retry_after(self):
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = 429
+        resp.text = ""
+        resp.headers = {"Retry-After": "3"}
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertEqual(ctx.exception.retry_after, 3)
+
+    def test_429_malformed_body_exposes_retry_after(self):
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = 429
+        resp.text = "nope"
+        resp.json.side_effect = json.JSONDecodeError("x", "", 0)
+        resp.headers = {"Retry-After": "11"}
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertEqual(ctx.exception.retry_after, 11)
+
+    def test_429_missing_or_bad_retry_after_is_none(self):
+        for headers in ({}, {"Retry-After": "soon"}):
+            resp = _make_response(429, {"success": False, "message": "slow down"})
+            resp.headers = headers
+            with self.assertRaises(MudrexAPIError) as ctx:
+                _HTTPClient._handle_response(resp)
+            self.assertIsNone(ctx.exception.retry_after)
+
+    def test_non_429_error_has_no_retry_after(self):
+        resp = _make_response(500, {"success": False, "message": "boom"})
+        resp.headers = {"Retry-After": "5"}
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertIsNone(ctx.exception.retry_after)
 
     def test_double_encoded_error_message_parsed(self):
         resp = _make_response(429, {
