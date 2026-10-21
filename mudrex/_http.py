@@ -174,7 +174,7 @@ class _HTTPClient:
             value = str(headers.get("Retry-After")).strip()
         except AttributeError:
             return None
-        return int(value) if value.isdigit() else None
+        return int(value) if value.isascii() and value.isdigit() else None
 
     @staticmethod
     def _handle_response(response):

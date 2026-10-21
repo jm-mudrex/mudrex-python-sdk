@@ -264,7 +264,8 @@ class TestHandleResponse(unittest.TestCase):
     def test_429_missing_or_bad_retry_after_is_none(self):
         for headers in (
             {}, {"Retry-After": "soon"}, {"Retry-After": "-5"},
-            {"Retry-After": "1.5"}, {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
+            {"Retry-After": "1.5"}, {"Retry-After": "\u00b2"},
+            {"Retry-After": "\u0663"}, {"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"},
         ):
             resp = _make_response(429, {"success": False, "message": "slow down"})
             resp.headers = headers
