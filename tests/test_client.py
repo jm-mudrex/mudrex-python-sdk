@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 import requests
 
 from mudrex import MudrexAPIError, TradeClient
-from mudrex._types import MudrexResponse
 
 
 def _make_response(status_code=200, body=None):
