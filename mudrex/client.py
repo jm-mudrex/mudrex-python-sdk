@@ -234,8 +234,8 @@ class TradeClient(_HTTPClient):
         Leverage is not part of the request. Call :meth:`set_leverage` for the
         asset first, otherwise the API returns ``400 leverage not found``.
         The ``leverage`` argument is deprecated: it is ignored (never sent)
-        and emits a ``FutureWarning``. It will be removed in the next minor
-        version.
+        and emits a ``FutureWarning``. It will be removed in a future minor
+        version (no earlier than 0.3.0).
 
         Args:
             symbol: Trading symbol (e.g. ``"BTCUSDT"``).
