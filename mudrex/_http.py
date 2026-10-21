@@ -3,7 +3,8 @@ import logging
 import os
 
 import requests
-from requests.exceptions import ConnectionError, Timeout
+from requests.exceptions import ConnectionError, ConnectTimeout, Timeout
+from urllib3.exceptions import ConnectTimeoutError, NewConnectionError
 
 from ._exceptions import MudrexAPIError, MudrexRequestError
 from ._types import MudrexResponse
@@ -15,6 +16,8 @@ except ImportError:
 
 BASE_URL = "https://trade.mudrex.com"
 DEFAULT_TIMEOUT = 10
+# Upper bound (seconds) on the Retry-After value exposed on rate-limit errors.
+MAX_RETRY_AFTER = 30
 
 logger = logging.getLogger("mudrex")
 
@@ -130,6 +133,11 @@ class _HTTPClient:
                 break
             except (ConnectionError, Timeout) as e:
                 retries_left -= 1
+                # A POST may have reached the exchange before the failure
+                # (e.g. read timeout), so resending could duplicate it. Only
+                # retry it when the request provably never left.
+                if method == "POST" and not self._never_sent(e):
+                    raise MudrexRequestError(str(e), original_error=e)
                 if retries_left < 0:
                     raise MudrexRequestError(str(e), original_error=e)
 
@@ -139,6 +147,16 @@ class _HTTPClient:
             )
 
         return self._handle_response(response)
+
+    @staticmethod
+    def _never_sent(exc):
+        """True if ``exc`` means the request never reached the server."""
+        if isinstance(exc, ConnectTimeout):
+            return True
+        if isinstance(exc, Timeout):
+            return False
+        reason = getattr(exc.args[0], "reason", None) if exc.args else None
+        return isinstance(reason, (NewConnectionError, ConnectTimeoutError))
 
     @staticmethod
     def _parse_error_payload(data, status_code):
@@ -166,7 +184,10 @@ class _HTTPClient:
 
     @staticmethod
     def _retry_after(response):
-        """Return the ``Retry-After`` header as int seconds, or ``None``."""
+        """Return the ``Retry-After`` header as int seconds, or ``None``.
+
+        Values above ``MAX_RETRY_AFTER`` are clamped to it.
+        """
         headers = getattr(response, "headers", None)
         if headers is None:
             return None
@@ -174,7 +195,10 @@ class _HTTPClient:
             value = str(headers.get("Retry-After")).strip()
         except AttributeError:
             return None
-        return int(value) if value.isascii() and value.isdigit() else None
+        if not (value.isascii() and value.isdigit()):
+            return None
+        # Long digit strings are clamped without int() (huge ints can raise).
+        return MAX_RETRY_AFTER if len(value) > 6 else min(int(value), MAX_RETRY_AFTER)
 
     @staticmethod
     def _handle_response(response):

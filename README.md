@@ -70,7 +70,7 @@ client = TradeClient(
     api_secret="...",
     trade_currency="USDT",  # "USDT" (default) or "INR"
     timeout=10,              # request timeout in seconds
-    max_retries=3,           # retries on network errors only
+    max_retries=3,           # retries on network errors; POSTs only when the request never left
     log_requests=True,       # enable debug logging
 )
 ```
@@ -166,7 +166,7 @@ client.get_order_detail(client_order_id="my-order-123")
 client.cancel_order(client_order_id="my-order-123")
 ```
 
-An invalid format raises `MudrexAPIError` (400 `invalid order identifier`); reusing an accepted id raises `MudrexAPIError` (409 `client order id already exists`). The SDK never retries a place. If a response is lost, call `get_order_detail(client_order_id=...)` before placing again. `place_risk_order` takes `stoploss_client_order_id` / `takeprofit_client_order_id`, and `close_position_partial` takes `client_order_id` (applied to the generated close order).
+An invalid format raises `MudrexAPIError` (400 `invalid order identifier`); reusing an accepted id raises `MudrexAPIError` (409 `client order id already exists`). A place is never resent once it may have reached the API (e.g. after a read timeout); only connect failures are retried. If a response is lost, call `get_order_detail(client_order_id=...)` before placing again. `place_risk_order` takes `stoploss_client_order_id` / `takeprofit_client_order_id`, and `close_position_partial` takes `client_order_id` (applied to the generated close order).
 
 ## Using Symbols vs UUIDs
 

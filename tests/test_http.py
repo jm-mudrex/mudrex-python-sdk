@@ -7,9 +7,11 @@ from unittest.mock import MagicMock, patch
 
 import requests
 
+from urllib3.exceptions import MaxRetryError, NewConnectionError
+
 from mudrex import __version__ as package_version
 from mudrex._exceptions import MudrexAPIError, MudrexRequestError
-from mudrex._http import _HTTPClient
+from mudrex._http import MAX_RETRY_AFTER, _HTTPClient
 from mudrex._types import MudrexResponse
 
 
@@ -372,6 +374,85 @@ class TestNetworkRetries(unittest.TestCase):
             self.assertIsNotNone(ctx.exception.original_error)
 
 
+class TestPostRetryPolicy(unittest.TestCase):
+
+    def test_post_read_timeout_sent_once_and_raises(self):
+        client = _HTTPClient(api_secret="s", max_retries=3)
+        with patch.object(
+            client._session, "request",
+            side_effect=requests.exceptions.ReadTimeout("read timed out"),
+        ) as mock_request:
+            with self.assertRaises(MudrexRequestError):
+                client._post("/futures/order", body={"quantity": "1"}, version="v2")
+        self.assertEqual(mock_request.call_count, 1)
+
+    def test_post_connection_reset_sent_once_and_raises(self):
+        client = _HTTPClient(api_secret="s", max_retries=3)
+        with patch.object(
+            client._session, "request",
+            side_effect=requests.exceptions.ConnectionError("Connection aborted"),
+        ) as mock_request:
+            with self.assertRaises(MudrexRequestError):
+                client._post("/futures/positions/p1/close")
+        self.assertEqual(mock_request.call_count, 1)
+
+    def test_post_retried_on_connect_error(self):
+        client = _HTTPClient(api_secret="s", max_retries=3)
+        success = _make_response(200, {"success": True, "data": {"ok": 1}})
+        refused = requests.exceptions.ConnectionError(
+            MaxRetryError(None, "/", reason=NewConnectionError(None, "refused"))
+        )
+        with patch.object(
+            client._session, "request",
+            side_effect=[refused, requests.exceptions.ConnectTimeout("t"), success],
+        ) as mock_request:
+            result = client._post("/futures/order", body={"quantity": "1"})
+        self.assertEqual(result["ok"], 1)
+        self.assertEqual(mock_request.call_count, 3)
+
+    def test_post_connect_errors_still_capped_by_max_retries(self):
+        client = _HTTPClient(api_secret="s", max_retries=2)
+        with patch.object(
+            client._session, "request",
+            side_effect=requests.exceptions.ConnectTimeout("t"),
+        ) as mock_request:
+            with self.assertRaises(MudrexRequestError):
+                client._post("/futures/order")
+        self.assertEqual(mock_request.call_count, 3)
+
+    def test_get_read_timeout_still_retried(self):
+        client = _HTTPClient(api_secret="s", max_retries=1)
+        success = _make_response(200, {"success": True, "data": None})
+        with patch.object(
+            client._session, "request",
+            side_effect=[requests.exceptions.ReadTimeout("t"), success],
+        ) as mock_request:
+            client._get("/test")
+        self.assertEqual(mock_request.call_count, 2)
+
+
+class TestRetryAfterClamp(unittest.TestCase):
+
+    def _retry_after(self, value):
+        resp = _make_response(429, {"success": False})
+        resp.headers = {"Retry-After": value}
+        return _HTTPClient._retry_after(resp)
+
+    def test_small_value_unchanged(self):
+        self.assertEqual(self._retry_after("7"), 7)
+
+    def test_huge_value_clamped(self):
+        self.assertEqual(self._retry_after("999999"), MAX_RETRY_AFTER)
+        self.assertEqual(self._retry_after("9" * 5000), MAX_RETRY_AFTER)
+
+    def test_huge_retry_after_on_429_error(self):
+        resp = _make_response(429, {"success": False})
+        resp.headers = {"Retry-After": "86400"}
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertEqual(ctx.exception.retry_after, MAX_RETRY_AFTER)
+
+
 class TestMudrexResponse(unittest.TestCase):
 
     def test_dict_access(self):
@@ -447,6 +528,18 @@ class TestPing(unittest.TestCase):
             with self.assertRaises(MudrexAPIError) as ctx:
                 client._ping()
             self.assertEqual(ctx.exception.code, 503)
+
+
+class TestPingIndependentOfResponseUnwrapping(unittest.TestCase):
+    """_ping uses the raw session, not _get, so null/scalar data is irrelevant."""
+
+    def test_ping_ok_when_data_is_null(self):
+        client = _HTTPClient(api_secret="s")
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = 200
+        resp.text = json.dumps({"success": True, "data": None})
+        with patch.object(client._session, "get", return_value=resp):
+            self.assertIsNone(client._ping())
 
 
 if __name__ == "__main__":

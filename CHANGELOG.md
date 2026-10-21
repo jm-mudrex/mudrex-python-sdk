@@ -29,10 +29,10 @@ Removed or invalid call forms raise `ValueError` and send no request. Two forms 
 - `get_fee(fee_id)` calls `GET /futures/fee/{fee_id}`.
 - `get_transactions(limit=None, trade_currency=None, transaction_type=None, status=None, sort_by=None, sort_order=None)` calls `GET /futures/transactions`.
   - `transaction_type` is `DEPOSIT` or `WITHDRAW` and is sent as `type`.
-  - `status` is `Completed`, `Processing` or `Failed`. It is checked case-insensitively and sent as given.
+  - `status` is `Completed`, `Processing` or `Failed`. It is checked case-insensitively and sent title-cased.
   - `sort_by` is `created_at` or `updated_at`. `sort_order` is `asc` or `desc`. Both are lower-cased before the check.
   - Invalid values raise `ValueError` before any request.
-- `MudrexAPIError.retry_after` holds the `Retry-After` header in seconds on HTTP 429. It is `None` when the header is missing or is not made of ASCII digits. The SDK does not retry.
+- `MudrexAPIError.retry_after` holds the `Retry-After` header in seconds on HTTP 429. It is `None` when the header is missing or is not made of ASCII digits. Values above 30 seconds are clamped to 30. The SDK does not wait on it.
 
 ### Deprecated
 
@@ -48,6 +48,9 @@ Removed or invalid call forms raise `ValueError` and send no request. Two forms 
 
 ### Other changes
 
+- POST requests (`place_order`, `close_position`, `close_position_partial` and the other POST calls) are no longer retried after a read timeout or connection reset, because the exchange may already have accepted them. They are retried only on connect failures, where nothing was sent. GET, PATCH and DELETE still retry up to `max_retries`.
+- All ids placed in URL paths (order, position, fee, asset) are percent-encoded, so a value like `abc/../x` cannot change the path.
+- `get_transactions(status=...)` is sent title-cased (`Completed`, `Processing`, `Failed`).
 - `get_execution_report` and `get_fee` raise `ValueError` on an empty or blank id.
 - HTTP helpers `_get`, `_patch` and `_delete` accept `version=`, like `_post`.
 

@@ -2,6 +2,7 @@
 
 import json
 import unittest
+import warnings
 from unittest.mock import MagicMock, patch
 
 import requests
@@ -446,6 +447,23 @@ class TestGetPositions(_ClientTestBase):
         )
 
 
+class TestGetPositionsShape(_ClientTestBase):
+
+    def test_null_data_returns_empty_list(self):
+        self._set_response({"success": True, "data": None})
+        self.assertEqual(self.client.get_positions(), [])
+
+    def test_non_null_data_is_a_list(self):
+        self._set_response(SUCCESS_LIST)
+        result = self.client.get_positions()
+        self.assertIsInstance(result, list)
+        self.assertEqual(len(result), 2)
+
+    def test_empty_list_data_is_a_list(self):
+        self._set_response({"success": True, "data": []})
+        self.assertEqual(self.client.get_positions(), [])
+
+
 class TestGetPositionHistory(_ClientTestBase):
 
     def test_defaults(self):
@@ -845,11 +863,16 @@ class TestTransactions(_ClientTestBase):
             },
         )
 
-    def test_status_validated_case_insensitively_and_sent_as_given(self):
-        for status in ("Completed", "processing", "FAILED"):
+    def test_status_validated_case_insensitively_and_sent_title_cased(self):
+        for given, sent in (
+            ("Completed", "Completed"),
+            ("processing", "Processing"),
+            ("FAILED", "Failed"),
+            ("completed", "Completed"),
+        ):
             self.mock_request.reset_mock()
-            self.client.get_transactions(status=status)
-            self.assertEqual(self.mock_request.call_args[1]["params"]["status"], status)
+            self.client.get_transactions(status=given)
+            self.assertEqual(self.mock_request.call_args[1]["params"]["status"], sent)
 
     def test_sort_args_lowercased(self):
         self.client.get_transactions(sort_by="CREATED_AT", sort_order="DESC")
@@ -973,6 +996,41 @@ class TestV1012ResponseShapes(_ClientTestBase):
         self._set_response({"success": True, "data": {"order_id": "o", "position_id": "p"}})
         resp = self.client.close_position("p")
         self.assertEqual((resp.order_id, resp.position_id), ("o", "p"))
+
+
+class TestPathIdsAreEncoded(_ClientTestBase):
+
+    EVIL = "abc/../x"
+    ENCODED = "abc%2F..%2Fx"
+
+    def test_ids_are_percent_encoded_in_paths(self):
+        calls = (
+            lambda: self.client.get_order(self.EVIL),
+            lambda: self.client.get_execution_report(self.EVIL),
+            lambda: self.client.get_fee(self.EVIL),
+            lambda: self.client.cancel_order(self.EVIL),
+            lambda: self.client.amend_order(self.EVIL, order_price="1", quantity="1"),
+            lambda: self.client.close_position(self.EVIL),
+            lambda: self.client.close_position_partial(
+                self.EVIL, quantity="1", order_type="MARKET"
+            ),
+            lambda: self.client.reverse_position(self.EVIL),
+            lambda: self.client.place_risk_order(self.EVIL, is_stoploss=True, stoploss_price="1"),
+            lambda: self.client.amend_risk_order(self.EVIL),
+            lambda: self.client.add_margin(self.EVIL, margin="1"),
+            lambda: self.client.get_liquidation_price(self.EVIL),
+            lambda: self.client.get_future(self.EVIL),
+            lambda: self.client.get_leverage(self.EVIL),
+            lambda: self.client.set_leverage(self.EVIL, leverage="5"),
+        )
+        for call in calls:
+            self.mock_request.reset_mock()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", FutureWarning)
+                call()
+            url = self.mock_request.call_args[1]["url"]
+            self.assertIn(self.ENCODED, url)
+            self.assertNotIn("/../", url)
 
 
 if __name__ == "__main__":

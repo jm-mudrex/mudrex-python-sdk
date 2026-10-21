@@ -1,5 +1,6 @@
 import warnings
 from typing import Optional, Union
+from urllib.parse import quote
 
 from ._http import _HTTPClient
 
@@ -27,6 +28,8 @@ class TradeClient(_HTTPClient):
             or ``"INR"``.
         timeout: Request timeout in seconds (default ``10``).
         max_retries: Retries on transient network errors (default ``3``).
+            POST requests are retried only when the request never left
+            (connect failures), never after a read timeout or reset.
         log_requests: Emit debug logs for every request/response (default ``False``).
 
     Example::
@@ -96,6 +99,11 @@ class TradeClient(_HTTPClient):
         return value
 
     @staticmethod
+    def _seg(value):
+        """Percent-encode a value for use as one URL path segment."""
+        return quote(str(value), safe="")
+
+    @staticmethod
     def _require_id(value, name):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"'{name}' is required")
@@ -148,7 +156,7 @@ class TradeClient(_HTTPClient):
             asset_id: Asset UUID (alternative to symbol).
         """
         identifier, params = self._resolve_asset(symbol, asset_id)
-        return self._get(f"/futures/{identifier}", params=params)
+        return self._get(f"/futures/{self._seg(identifier)}", params=params)
 
     def get_available_funds(self, *, source: Optional[str] = None):
         """Get available funds for futures trading.
@@ -179,7 +187,7 @@ class TradeClient(_HTTPClient):
         """
         identifier, params = self._resolve_asset(symbol, asset_id)
         params["trade_currency"] = self._trade_currency
-        return self._get(f"/futures/{identifier}/leverage", params=params)
+        return self._get(f"/futures/{self._seg(identifier)}/leverage", params=params)
 
     def set_leverage(
         self,
@@ -199,7 +207,7 @@ class TradeClient(_HTTPClient):
         """
         identifier, params = self._resolve_asset(symbol, asset_id)
         return self._post(
-            f"/futures/{identifier}/leverage",
+            f"/futures/{self._seg(identifier)}/leverage",
             params=params,
             body={
                 "leverage": leverage,
@@ -251,7 +259,9 @@ class TradeClient(_HTTPClient):
             client_order_id: Optional caller-chosen id (letters, digits, ``-``,
                 ``_``; max 64 chars). Returned in the response. An invalid
                 format raises ``MudrexAPIError`` (400); reusing an accepted id
-                raises ``MudrexAPIError`` (409). The SDK never retries a place.
+                raises ``MudrexAPIError`` (409). A place is never resent once the
+                request may have reached the API (e.g. a read timeout); only
+                connect failures, where nothing was sent, are retried.
                 If a response is lost, call :meth:`get_order_detail` with the
                 ``client_order_id`` before deciding to place again.
 
@@ -264,6 +274,7 @@ class TradeClient(_HTTPClient):
             ``client_order_id`` (when set), etc.
         """
         if leverage is not None:
+            # Deprecated: ignored, never sent. Removed in 0.3.0.
             warnings.warn(
                 "leverage is ignored by place_order and will be removed in 0.3.0; "
                 "use set_leverage()",
@@ -319,7 +330,7 @@ class TradeClient(_HTTPClient):
             FutureWarning,
             stacklevel=2,
         )
-        return self._get(f"/futures/orders/{order_id}")
+        return self._get(f"/futures/orders/{self._seg(order_id)}")
 
     def get_order_detail(
         self,
@@ -355,7 +366,7 @@ class TradeClient(_HTTPClient):
             ``filled_time``, ``is_maker``, ``trading_fee`` and ``trxn_id``.
         """
         self._require_id(order_id, "order_id")
-        return self._get(f"/futures/orders/{order_id}/execution-report")
+        return self._get(f"/futures/orders/{self._seg(order_id)}/execution-report")
 
     def get_order_history(self, *, limit: int = 20, offset: Optional[int] = None):
         """Get order history (filled, partially filled, cancelled).
@@ -405,7 +416,7 @@ class TradeClient(_HTTPClient):
             takeprofit_order_id: Existing take-profit order UUID to amend.
         """
         return self._patch(
-            f"/futures/orders/{order_id}",
+            f"/futures/orders/{self._seg(order_id)}",
             body={
                 "order_price": order_price,
                 "quantity": quantity,
@@ -444,7 +455,7 @@ class TradeClient(_HTTPClient):
             return self._delete(
                 "/futures/orders", params={"client_order_id": client_order_id}
             )
-        return self._delete(f"/futures/orders/{order_id}")
+        return self._delete(f"/futures/orders/{self._seg(order_id)}")
 
     # ════════════════════════════════════════════════════════════════════
     #  POSITIONS
@@ -505,7 +516,7 @@ class TradeClient(_HTTPClient):
             close is asynchronous; check the final state with
             :meth:`get_order_detail`.
         """
-        return self._post(f"/futures/positions/{position_id}/close")
+        return self._post(f"/futures/positions/{self._seg(position_id)}/close")
 
     def close_position_partial(
         self,
@@ -532,7 +543,7 @@ class TradeClient(_HTTPClient):
             ``quantity`` is a string.
         """
         return self._post(
-            f"/futures/positions/{position_id}/close/partial",
+            f"/futures/positions/{self._seg(position_id)}/close/partial",
             body={
                 "quantity": quantity,
                 "order_type": order_type,
@@ -547,7 +558,7 @@ class TradeClient(_HTTPClient):
         Args:
             position_id: Position UUID.
         """
-        return self._post(f"/futures/positions/{position_id}/reverse")
+        return self._post(f"/futures/positions/{self._seg(position_id)}/reverse")
 
     def place_risk_order(
         self,
@@ -574,7 +585,7 @@ class TradeClient(_HTTPClient):
             takeprofit_client_order_id: Optional id to set on the new take-profit order.
         """
         return self._post(
-            f"/futures/positions/{position_id}/riskorder",
+            f"/futures/positions/{self._seg(position_id)}/riskorder",
             body={
                 "is_stoploss": is_stoploss,
                 "is_takeprofit": is_takeprofit,
@@ -617,7 +628,7 @@ class TradeClient(_HTTPClient):
             trigger_type: ``"MARKET"`` or ``"LIMIT"`` (optional).
         """
         return self._patch(
-            f"/futures/positions/{position_id}/riskorder",
+            f"/futures/positions/{self._seg(position_id)}/riskorder",
             body={
                 "is_stoploss": is_stoploss,
                 "is_takeprofit": is_takeprofit,
@@ -639,7 +650,7 @@ class TradeClient(_HTTPClient):
             margin: Amount of margin to add.
         """
         return self._post(
-            f"/futures/positions/{position_id}/add-margin",
+            f"/futures/positions/{self._seg(position_id)}/add-margin",
             body={"margin": margin},
         )
 
@@ -657,7 +668,7 @@ class TradeClient(_HTTPClient):
                 liquidation price (optional).
         """
         return self._get(
-            f"/futures/positions/{position_id}/liq-price",
+            f"/futures/positions/{self._seg(position_id)}/liq-price",
             params={
                 "ext_margin": ext_margin,
                 "trade_currency": self._trade_currency,
@@ -698,7 +709,7 @@ class TradeClient(_HTTPClient):
             when returned.
         """
         self._require_id(fee_id, "fee_id")
-        return self._get(f"/futures/fee/{fee_id}")
+        return self._get(f"/futures/fee/{self._seg(fee_id)}")
 
     # ════════════════════════════════════════════════════════════════════
     #  TRANSACTIONS
@@ -727,7 +738,7 @@ class TradeClient(_HTTPClient):
             transaction_type: ``"DEPOSIT"`` or ``"WITHDRAW"``
                 (case-insensitive); sent as the ``type`` query parameter.
             status: ``"Completed"``, ``"Processing"`` or ``"Failed"``
-                (case-insensitive; validated, then sent as given).
+                (case-insensitive; sent title-cased).
             sort_by: ``"created_at"`` or ``"updated_at"`` (case-insensitive;
                 sent lower-cased).
             sort_order: ``"asc"`` or ``"desc"`` (case-insensitive; sent
@@ -742,12 +753,12 @@ class TradeClient(_HTTPClient):
                 raise ValueError(
                     "transaction_type must be 'DEPOSIT' or 'WITHDRAW'"
                 )
-        if status is not None and str(status).lower() not in (
-            "completed", "processing", "failed"
-        ):
-            raise ValueError(
-                "status must be 'Completed', 'Processing' or 'Failed'"
-            )
+        if status is not None:
+            status = str(status).title()
+            if status not in ("Completed", "Processing", "Failed"):
+                raise ValueError(
+                    "status must be 'Completed', 'Processing' or 'Failed'"
+                )
         if sort_by is not None:
             sort_by = str(sort_by).lower()
             if sort_by not in ("created_at", "updated_at"):
