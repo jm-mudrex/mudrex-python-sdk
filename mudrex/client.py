@@ -532,8 +532,9 @@ class TradeClient(_HTTPClient):
         Args:
             position_id: Position UUID.
             quantity: Quantity to close.
-            order_type: ``"MARKET"`` or ``"LIMIT"``.
-            limit_price: Limit price for a limit close (optional).
+            order_type: ``"MARKET"`` or ``"LIMIT"`` (API v1.0.12). The close
+                side is always the opposite of the position.
+            limit_price: Limit price. Required when ``order_type="LIMIT"``.
             client_order_id: Optional id applied to the generated close order
                 (not the original order or the position).
 
