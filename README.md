@@ -119,7 +119,7 @@ client = TradeClient(
 |---|---|
 | `get_positions(limit=20)` | Get open positions |
 | `get_position_history(limit=20)` | Get position history |
-| `close_position(position_id)` | Close entire position; returns `order_id` (close order) and `position_id` |
+| `close_position(position_id)` | Close entire position; returns `order_id` (close order), `position_id`, `status` (`"CREATED"`: the close is asynchronous, so confirm with `get_order_detail`) and `message` |
 | `close_position_partial(position_id, quantity="0.001", order_type="MARKET", client_order_id=None)` | Partially close; returns `order_id`, `position_id`, `quantity` |
 | `reverse_position(position_id)` | Reverse a position |
 | `place_risk_order(position_id, is_stoploss=True, stoploss_price="95000", stoploss_client_order_id=None)` | Add SL/TP |
@@ -131,7 +131,7 @@ client = TradeClient(
 
 | Method | Description |
 |---|---|
-| `get_fee_history(limit=10)` | Get trading fee history |
+| `get_fee_history(limit=10)` | Get trading fee history (`order_id` is absent on non-trade rows such as funding; use `.get("order_id")`) |
 | `get_fee(fee_id)` | Get one fee record (`role`, `fills`) by id from fee history |
 
 ### Wallet

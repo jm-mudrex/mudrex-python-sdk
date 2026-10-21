@@ -261,6 +261,19 @@ class TestHandleResponse(unittest.TestCase):
             _HTTPClient._handle_response(resp)
         self.assertEqual(ctx.exception.retry_after, 11)
 
+    def test_429_non_json_body_raises_api_error_with_retry_after(self):
+        resp = MagicMock(spec=requests.Response)
+        resp.status_code = 429
+        resp.text = "<html>Too Many Requests</html>"
+        resp.json.side_effect = ValueError("not json")
+        resp.headers = {"Retry-After": "9"}
+        with self.assertRaises(MudrexAPIError) as ctx:
+            _HTTPClient._handle_response(resp)
+        self.assertEqual(ctx.exception.code, 429)
+        self.assertEqual(ctx.exception.message, "API rate limit exceeded")
+        self.assertEqual(ctx.exception.retry_after, 9)
+        self.assertIs(ctx.exception.response, resp)
+
     def test_429_missing_or_bad_retry_after_is_none(self):
         for headers in (
             {}, {"Retry-After": "soon"}, {"Retry-After": "-5"},

@@ -255,6 +255,10 @@ class TradeClient(_HTTPClient):
                 If a response is lost, call :meth:`get_order_detail` with the
                 ``client_order_id`` before deciding to place again.
 
+        The asset's ``min_contract`` does not reflect the minimum order
+        value. Orders below it fail with
+        ``400 order value less than minimum required value``.
+
         Returns:
             Object with ``order_id``, ``position_id``, ``status``,
             ``client_order_id`` (when set), etc.
@@ -425,6 +429,9 @@ class TradeClient(_HTTPClient):
         Pass exactly one. Cancel by UUID uses ``DELETE /futures/orders/{order_id}``;
         cancel by client id uses ``DELETE /futures/orders?client_order_id=...``.
 
+        On success the API can return empty ``message``, ``order_id`` and
+        ``status`` strings. Confirm the outcome with :meth:`get_order_detail`.
+
         Args:
             order_id: Order UUID.
             client_order_id: Caller-chosen id set at placement.
@@ -491,9 +498,12 @@ class TradeClient(_HTTPClient):
             position_id: Position UUID.
 
         Returns:
-            Object with ``order_id`` (the close order UUID) and ``position_id``
-            (the position UUID). Before API v1.0.12 ``position_id`` held the
-            close order UUID; read ``order_id`` for it now.
+            Object ``{order_id, position_id, status, message}``: ``order_id``
+            is the close order UUID and ``position_id`` the position UUID.
+            Before API v1.0.12 ``position_id`` held the close order UUID; read
+            ``order_id`` for it now. ``status`` is ``"CREATED"`` because the
+            close is asynchronous; check the final state with
+            :meth:`get_order_detail`.
         """
         return self._post(f"/futures/positions/{position_id}/close")
 
@@ -517,8 +527,9 @@ class TradeClient(_HTTPClient):
                 (not the original order or the position).
 
         Returns:
-            Object with ``order_id`` (close order UUID), ``position_id`` and
-            ``quantity`` (API v1.0.12; this was ``True`` before).
+            Object ``{order_id, position_id, quantity}`` (API v1.0.12; this
+            was ``True`` before). ``order_id`` is the close order UUID and
+            ``quantity`` is a string.
         """
         return self._post(
             f"/futures/positions/{position_id}/close/partial",
@@ -659,6 +670,9 @@ class TradeClient(_HTTPClient):
 
     def get_fee_history(self, *, limit: int = 10, offset: Optional[int] = None):
         """Get trading fee history.
+
+        ``order_id`` is not present on every row: non-trade fees such as
+        funding have none. Read it with ``row.get("order_id")``.
 
         Args:
             limit: Number of results (default 10).
