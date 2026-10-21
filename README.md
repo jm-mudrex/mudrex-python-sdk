@@ -107,7 +107,7 @@ client = TradeClient(
 | `place_order("BTCUSDT", quantity="0.001", order_type="LONG", trigger_type="MARKET", client_order_id=None)` | Place a new order (`POST /fapi/v2/futures/order`). Set leverage first with `set_leverage` |
 | `get_orders(limit=20)` | Get open orders |
 | `get_order_detail(order_id=None, client_order_id=None)` | Get a single order by UUID and/or client order id |
-| `get_order(order_id)` | **Deprecated** — use `get_order_detail` |
+| `get_order(order_id)` | Deprecated. Use `get_order_detail` |
 | `get_execution_report(order_id)` | Per-fill execution report for an order |
 | `get_order_history(limit=20)` | Get order history |
 | `amend_order(order_id, order_price="50000", quantity="0.002")` | Amend a limit order (docs require both `order_price` and `quantity`) |
@@ -144,7 +144,7 @@ client = TradeClient(
 
 ## Trade Currency
 
-**USDT** and **INR** are supported. The client defaults to `trade_currency="USDT"`, so you can omit it:
+`USDT` and `INR` are supported. The client defaults to `trade_currency="USDT"`, so you can omit it:
 
 ```python
 client = TradeClient(api_secret="...")  # uses USDT by default
@@ -183,10 +183,10 @@ All methods return a `MudrexResponse` (a dict with attribute access) or a list o
 
 - **Object responses** (e.g. `place_order`, `get_leverage`): one `MudrexResponse` with the API fields.
 - **List responses** (e.g. `get_orders`, `get_positions`, `get_position_history`): a list of `MudrexResponse` objects.
-- **Scalar responses** (e.g. `get_liquidation_price`, where `data` is a price string): the value itself, e.g. `"62888.3"`.
-- **Empty responses:** when the API returns `data: null` the SDK returns `None`; `get_positions()` returns `[]` when there are no open positions.
+- Scalar responses (e.g. `get_liquidation_price`, where `data` is a price string): the value itself, e.g. `"62888.3"`.
+- Empty responses: when the API returns `data: null` the SDK returns `None`; `get_positions()` returns `[]` when there are no open positions.
 
-**v1.0.12 fields.** `close_position` returns `order_id` (the close order UUID) and `position_id` (the position UUID). `close_position_partial` returns `order_id`, `position_id` and `quantity`. Order responses, `get_positions()` and `get_position_history()` include `position_id`; position history rows also include `order_id`, and a history row's `id` is the row UUID, not the position UUID. `list_futures()` / `get_future()` include `previous_funding_interval` (Unix epoch seconds of the previous funding time).
+Fields added in API v1.0.12: `close_position` returns `order_id` (the close order UUID) and `position_id` (the position UUID). `close_position_partial` returns `order_id`, `position_id` and `quantity`. Order responses, `get_positions()` and `get_position_history()` include `position_id`; position history rows also include `order_id`, and a history row's `id` is the row UUID, not the position UUID. `list_futures()` / `get_future()` include `previous_funding_interval` (Unix epoch seconds of the previous funding time).
 
 ```python
 resp = client.get_leverage("BTCUSDT")
@@ -266,7 +266,7 @@ except MudrexAPIError as e:
 - **`place_order`** returns a single object with **`order_id`**.
 - **`get_orders()`** and **`get_order_history()`** return a **list** of orders; each item has **`id`** (not `order_id`).
 - **`get_positions()`** returns a list of positions; each item has **`id`** and, as of API v1.0.12, **`position_id`** (same value).
-- **`get_position_history()`** rows: **`id`** is the history-row UUID, **not** the position UUID. Use the row's **`position_id`** for the position and **`order_id`** for the order.
+- **`get_position_history()`** rows: **`id`** is the history-row UUID, not the position UUID. Use the row's **`position_id`** for the position and **`order_id`** for the order.
 
 Use the same id for follow-up calls:
 
@@ -288,9 +288,9 @@ So: **single-object responses** use `order_id` / similar; **list responses** use
 
 ## Migrating
 
-**0.2.0 is a breaking release.** Null and scalar API data is now returned unwrapped (no more `resp.result`), and `place_order` uses the v2 path without `leverage`.
+0.2.0 is a breaking release. Null and scalar API data is now returned unwrapped (no more `resp.result`), and `place_order` uses the v2 path without `leverage`.
 
-See [CHANGELOG.md](CHANGELOG.md) for changed signatures (old → new form), including the deprecation of `leverage` on `place_order` (ignored, `FutureWarning`, removed in 0.3.0) and the v1.0.12 close-response shapes.
+See [CHANGELOG.md](CHANGELOG.md) for changed signatures (old and new forms), including the deprecation of `leverage` on `place_order` (ignored, `FutureWarning`, removed in 0.3.0) and the v1.0.12 close-response shapes.
 
 ## License
 

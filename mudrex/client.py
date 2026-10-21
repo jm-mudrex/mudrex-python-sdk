@@ -474,7 +474,7 @@ class TradeClient(_HTTPClient):
     def get_position_history(self, *, limit: int = 20, offset: Optional[int] = None):
         """Get closed/liquidated position history.
 
-        Each row's ``id`` is the history-row UUID, **not** the position UUID.
+        Each row's ``id`` is the history-row UUID, not the position UUID.
         Use the row's ``position_id`` for the position and ``order_id`` for
         the order that closed it (API v1.0.12).
 
