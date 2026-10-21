@@ -695,7 +695,7 @@ class TradeClient(_HTTPClient):
         *,
         limit: Optional[int] = None,
         trade_currency: Optional[str] = None,
-        type: Optional[str] = None,
+        transaction_type: Optional[str] = None,
         status: Optional[str] = None,
         sort_by: Optional[str] = None,
         sort_order: Optional[str] = None,
@@ -710,28 +710,43 @@ class TradeClient(_HTTPClient):
             limit: Maximum number of records.
             trade_currency: ``"USDT"`` or ``"INR"``. Defaults to the client's
                 trade currency.
-            type: ``"DEPOSIT"`` or ``"WITHDRAW"`` (case-insensitive).
-            status: Passed through as given (the API accepts ``Completed``,
-                ``Processing``, ``Failed``, case-insensitive).
-            sort_by: ``"created_at"`` or ``"updated_at"``.
-            sort_order: ``"asc"`` or ``"desc"``.
+            transaction_type: ``"DEPOSIT"`` or ``"WITHDRAW"``
+                (case-insensitive); sent as the ``type`` query parameter.
+            status: ``"Completed"``, ``"Processing"`` or ``"Failed"``
+                (case-insensitive; validated, then sent as given).
+            sort_by: ``"created_at"`` or ``"updated_at"`` (case-insensitive;
+                sent lower-cased).
+            sort_order: ``"asc"`` or ``"desc"`` (case-insensitive; sent
+                lower-cased).
         """
         if trade_currency is not None:
             self._validate_currency(trade_currency, "trade_currency")
-        if type is not None:
-            type = str(type).upper()
-            if type not in ("DEPOSIT", "WITHDRAW"):
-                raise ValueError("type must be 'DEPOSIT' or 'WITHDRAW'")
-        if sort_by is not None and sort_by not in ("created_at", "updated_at"):
-            raise ValueError("sort_by must be 'created_at' or 'updated_at'")
-        if sort_order is not None and sort_order not in ("asc", "desc"):
-            raise ValueError("sort_order must be 'asc' or 'desc'")
+        if transaction_type is not None:
+            transaction_type = str(transaction_type).upper()
+            if transaction_type not in ("DEPOSIT", "WITHDRAW"):
+                raise ValueError(
+                    "transaction_type must be 'DEPOSIT' or 'WITHDRAW'"
+                )
+        if status is not None and str(status).lower() not in (
+            "completed", "processing", "failed"
+        ):
+            raise ValueError(
+                "status must be 'Completed', 'Processing' or 'Failed'"
+            )
+        if sort_by is not None:
+            sort_by = str(sort_by).lower()
+            if sort_by not in ("created_at", "updated_at"):
+                raise ValueError("sort_by must be 'created_at' or 'updated_at'")
+        if sort_order is not None:
+            sort_order = str(sort_order).lower()
+            if sort_order not in ("asc", "desc"):
+                raise ValueError("sort_order must be 'asc' or 'desc'")
         return self._get(
             "/futures/transactions",
             params={
                 "limit": limit,
                 "trade_currency": trade_currency or self._trade_currency,
-                "type": type,
+                "type": transaction_type,
                 "status": status,
                 "sort_by": sort_by,
                 "sort_order": sort_order,
@@ -771,6 +786,8 @@ class TradeClient(_HTTPClient):
         Only available on USDT clients: raises ``ValueError`` without sending
         a request when the client's ``trade_currency`` is ``"INR"``.
         """
+        # Intentional: INR transfers are not supported by the API; see
+        # https://docs.trade.mudrex.com for the supported wallet operations.
         if self._trade_currency == "INR":
             raise ValueError("transfer() supports USDT only")
         return self._post(

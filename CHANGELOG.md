@@ -1,10 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 Brings the SDK to parity with the Futures API docs v1.0.12. This release
 contains breaking changes (response shapes, unwrapped scalar/null data) and
-needs a **minor-version tag** at release. Removed or invalid call forms raise
+must be tagged **`v0.2.0`** (a minor version) at release, not a patch; the release workflow checks that the tag has a matching heading here. Removed or invalid call forms raise
 `ValueError` and send no request. Two forms are deprecated instead and emit a
 `FutureWarning`: `get_order` and the `leverage` argument of `place_order`.
 
@@ -26,7 +26,7 @@ needs a **minor-version tag** at release. Removed or invalid call forms raise
 - `get_order_detail(order_id=None, client_order_id=None)` — `GET /futures/orders/detail`.
 - `get_execution_report(order_id)` — `GET /futures/orders/{order_id}/execution-report`.
 - `get_fee(fee_id)` — `GET /futures/fee/{fee_id}`.
-- `get_transactions(limit=None, trade_currency=None, type=None, status=None, sort_by=None, sort_order=None)` — `GET /futures/transactions`. `type` is `DEPOSIT`/`WITHDRAW`, `sort_by` is `created_at`/`updated_at`, `sort_order` is `asc`/`desc`; invalid values raise `ValueError`. Known backend issues: `trade_currency` is currently not applied by the API, and `status=Processing` currently returns no rows.
+- `get_transactions(limit=None, trade_currency=None, transaction_type=None, status=None, sort_by=None, sort_order=None)` — `GET /futures/transactions`. `transaction_type` (sent as `type`) is `DEPOSIT`/`WITHDRAW`, `sort_by` is `created_at`/`updated_at`, `sort_order` is `asc`/`desc`; `status` (`Completed`/`Processing`/`Failed`) is validated case-insensitively and sent as given; `sort_by`/`sort_order` are lower-cased before validation. Invalid values raise `ValueError` before any request. Known backend issues: `trade_currency` is currently not applied by the API, and `status=Processing` currently returns no rows.
 - `MudrexAPIError.retry_after`: seconds from the `Retry-After` header on HTTP 429 (`None` if absent). The SDK still does not retry.
 
 ### Deprecated

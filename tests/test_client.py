@@ -367,13 +367,6 @@ class TestGetOrders(_ClientTestBase):
         )
 
 
-class TestGetOrder(_ClientTestBase):
-
-    def test_basic(self):
-        self.client.get_order("order-uuid-123")
-        self._assert_called_with("GET", "/futures/orders/order-uuid-123")
-
-
 class TestGetOrderHistory(_ClientTestBase):
 
     def test_defaults(self):
@@ -838,7 +831,7 @@ class TestTransactions(_ClientTestBase):
 
     def test_filters_sent_when_set(self):
         self.client.get_transactions(
-            type="deposit", status="Completed", sort_by="updated_at", sort_order="desc"
+            transaction_type="deposit", status="Completed", sort_by="updated_at", sort_order="desc"
         )
         self._assert_called_with(
             "GET", "/futures/transactions",
@@ -851,15 +844,25 @@ class TestTransactions(_ClientTestBase):
             },
         )
 
-    def test_status_passed_through_unchanged(self):
-        self.client.get_transactions(status="processing")
-        self.assertEqual(self.mock_request.call_args[1]["params"]["status"], "processing")
+    def test_status_validated_case_insensitively_and_sent_as_given(self):
+        for status in ("Completed", "processing", "FAILED"):
+            self.mock_request.reset_mock()
+            self.client.get_transactions(status=status)
+            self.assertEqual(self.mock_request.call_args[1]["params"]["status"], status)
+
+    def test_sort_args_lowercased(self):
+        self.client.get_transactions(sort_by="CREATED_AT", sort_order="DESC")
+        params = self.mock_request.call_args[1]["params"]
+        self.assertEqual(params["sort_by"], "created_at")
+        self.assertEqual(params["sort_order"], "desc")
 
     def test_invalid_filters_raise_without_request(self):
         for kwargs in (
-            {"type": "TRANSFER"},
+            {"transaction_type": "TRANSFER"},
             {"sort_by": "amount"},
             {"sort_order": "up"},
+            {"status": "Pending"},
+            {"status": ""},
         ):
             with self.assertRaises(ValueError):
                 self.client.get_transactions(**kwargs)

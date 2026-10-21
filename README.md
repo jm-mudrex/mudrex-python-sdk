@@ -140,7 +140,7 @@ client = TradeClient(
 |---|---|
 | `get_wallet_funds(currency=None)` | Get spot wallet balances (`"USDT"` or `"INR"`; defaults to the client's `trade_currency`) |
 | `transfer("SPOT", "FUTURES", "100")` | Transfer between wallets (USDT clients only; raises `ValueError` on an INR client) |
-| `get_transactions(limit=None, trade_currency=None, type=None, status=None, sort_by=None, sort_order=None)` | Futures wallet deposit/withdraw records (known backend issues: `trade_currency` is not currently applied; `status="Processing"` returns no rows) |
+| `get_transactions(limit=None, trade_currency=None, transaction_type=None, status=None, sort_by=None, sort_order=None)` | Futures wallet deposit/withdraw records (known backend issues: `trade_currency` is not currently applied; `status="Processing"` returns no rows) |
 
 ## Trade Currency
 
