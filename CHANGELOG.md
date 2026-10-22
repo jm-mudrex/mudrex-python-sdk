@@ -32,7 +32,7 @@ Removed or invalid call forms raise `ValueError` and send no request. Two forms 
   - `status` is `Completed`, `Processing` or `Failed`. It is checked case-insensitively and sent title-cased.
   - `sort_by` is `created_at` or `updated_at`. `sort_order` is `asc` or `desc`. Both are lower-cased before the check.
   - Invalid values raise `ValueError` before any request.
-- `MudrexAPIError.retry_after` holds the `Retry-After` header in seconds on HTTP 429. It is `None` when the header is missing or is not made of ASCII digits. Values above 30 seconds are clamped to 30. The SDK does not wait on it.
+- `MudrexAPIError.retry_after` holds the `Retry-After` header in seconds on HTTP 429. It is `None` when the header is missing or is not made of ASCII digits. The value is reported as sent.
 
 ### Deprecated
 
@@ -48,6 +48,7 @@ Removed or invalid call forms raise `ValueError` and send no request. Two forms 
 
 ### Other changes
 
+- A 429 is retried when `Retry-After` is at most 30 seconds (`MAX_RETRY_AFTER`): the SDK sleeps that long and resends, up to `max_retries` (shared with network retries). If the header is above 30 seconds, missing or invalid, `MudrexAPIError` is raised right away with the real value in `retry_after`. A 429 means the request was rejected before processing, so POSTs are retried too.
 - POST requests (`place_order`, `close_position`, `close_position_partial` and the other POST calls) are no longer retried after a read timeout or connection reset, because the exchange may already have accepted them. They are retried only on connect failures, where nothing was sent. GET, PATCH and DELETE still retry up to `max_retries`.
 - All ids placed in URL paths (order, position, fee, asset) are percent-encoded, so a value like `abc/../x` cannot change the path.
 - `get_transactions(status=...)` is sent title-cased (`Completed`, `Processing`, `Failed`).

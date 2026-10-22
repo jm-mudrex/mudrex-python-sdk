@@ -232,7 +232,7 @@ The Mudrex API enforces tiered rate limits (see [Authentication and Rate Limits]
 | Core trading endpoints | Default limits plus 720000/day |
 | Wallet | 2 req/s, 50/min, 3000/hr |
 
-Limits use fixed clock windows. This SDK does **not** throttle or retry requests. If you exceed a limit, the API returns HTTP 429, which is raised as `MudrexAPIError`; `e.retry_after` holds the `Retry-After` header in seconds (`None` if absent). You are responsible for pacing your requests.
+Limits use fixed clock windows. This SDK does **not** throttle requests. If you exceed a limit, the API returns HTTP 429. When `Retry-After` is 30 seconds or less, the SDK waits that long and retries, up to `max_retries`. Otherwise (longer, missing or invalid) it raises `MudrexAPIError` straight away; `e.retry_after` holds the header in seconds as sent (`None` if absent). You are responsible for pacing your requests.
 
 ## Troubleshooting
 
@@ -246,10 +246,10 @@ Each contract has a minimum notional (order value). Use `get_future(symbol)` to 
 
 ### Rate limit (429) and backoff
 
-When you hit a rate limit, the API returns 429 and the SDK raises `MudrexAPIError` with message "API rate limit exceeded". The SDK does not retry or throttle. To avoid repeated 429s:
+When you hit a rate limit, the API returns 429 and the SDK waits and retries when `Retry-After` is 30 seconds or less (up to `max_retries`). If it is longer, missing or invalid, or retries run out, the SDK raises `MudrexAPIError` with message "API rate limit exceeded". The SDK does not throttle. To avoid repeated 429s:
 
 - Stay within the tier limits above; wallet endpoints are much tighter than trading endpoints.
-- On 429, catch the exception, wait `e.retry_after` seconds (when set), then retry:
+- If a 429 still reaches you, catch the exception, wait `e.retry_after` seconds (when set), then retry:
 
 ```python
 try:

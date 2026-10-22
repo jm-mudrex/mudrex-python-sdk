@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import time
 
 import requests
 from requests.exceptions import ConnectionError, ConnectTimeout, Timeout
@@ -16,7 +17,7 @@ except ImportError:
 
 BASE_URL = "https://trade.mudrex.com"
 DEFAULT_TIMEOUT = 10
-# Upper bound (seconds) on the Retry-After value exposed on rate-limit errors.
+# A 429 is retried only when Retry-After is at or below this many seconds.
 MAX_RETRY_AFTER = 30
 
 logger = logging.getLogger("mudrex")
@@ -26,8 +27,9 @@ class _HTTPClient:
     """Low-level HTTP transport for the Mudrex FAPI.
 
     Handles authentication headers, request dispatch, response parsing,
-    and network-error retries.  No rate-limit throttling — requests fire
-    immediately; API errors (including rate-limit) are surfaced as exceptions.
+    and retries.  No proactive throttling — requests fire immediately.  A 429
+    is retried after its ``Retry-After`` wait when that is at most
+    ``MAX_RETRY_AFTER`` seconds; other API errors are surfaced as exceptions.
     """
 
     def __init__(
@@ -130,7 +132,6 @@ class _HTTPClient:
                     headers=headers,
                     timeout=self._timeout,
                 )
-                break
             except (ConnectionError, Timeout) as e:
                 retries_left -= 1
                 # A POST may have reached the exchange before the failure
@@ -140,6 +141,19 @@ class _HTTPClient:
                     raise MudrexRequestError(str(e), original_error=e)
                 if retries_left < 0:
                     raise MudrexRequestError(str(e), original_error=e)
+                continue
+
+            # 429 means the request was rejected before processing, so any
+            # method (POST included) is safe to resend after the wait.
+            if response.status_code == 429 and retries_left > 0:
+                wait = self._retry_after(response)
+                if wait is not None and wait <= MAX_RETRY_AFTER:
+                    retries_left -= 1
+                    if self._log_requests:
+                        logger.debug("429 on %s %s, retrying in %ss", method, url, wait)
+                    time.sleep(wait)
+                    continue
+            break
 
         if self._log_requests:
             logger.debug(
@@ -186,7 +200,8 @@ class _HTTPClient:
     def _retry_after(response):
         """Return the ``Retry-After`` header as int seconds, or ``None``.
 
-        Values above ``MAX_RETRY_AFTER`` are clamped to it.
+        The value is returned as sent (not capped); ``None`` if the header is
+        missing or not a non-negative integer.
         """
         headers = getattr(response, "headers", None)
         if headers is None:
@@ -197,8 +212,10 @@ class _HTTPClient:
             return None
         if not (value.isascii() and value.isdigit()):
             return None
-        # Long digit strings are clamped without int() (huge ints can raise).
-        return MAX_RETRY_AFTER if len(value) > 6 else min(int(value), MAX_RETRY_AFTER)
+        try:
+            return int(value)
+        except ValueError:  # absurdly long digit string
+            return None
 
     @staticmethod
     def _handle_response(response):
